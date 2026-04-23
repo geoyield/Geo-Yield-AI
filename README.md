@@ -74,3 +74,30 @@ El flujo de datos sigue una estructura **Cloud-Native**:
    ```bash
    git clone [https://github.com/TU_USUARIO/pj-geo-yield-ai.git](https://github.com/TU_USUARIO/pj-geo-yield-ai.git)
    cd pj-geo-yield-ai
+
+2. **Configurar el entorno:**
+Crea un archivo .env basado en .env.example con tus credenciales de API.
+
+3. Instalar dependencias:
+    ```bash
+    pip install -r requirements.txt
+
+4. Ejecutar la aplicación:
+    ```bash
+    XXXX
+
+## 🔄 DevOps y Despliegue
+Este proyecto aplica los conocimientos de ingeniería adquiridos en el Máster:
+
+    - Contenedores: Imagen Docker para asegurar que el entorno de desarrollo sea idéntico al de producción.
+
+    - CI/CD: Pipelines en GitHub Actions para despliegue automático en Render o Railway.
+
+    - Observabilidad: Monitorización básica de latencias en las llamadas al LLM.
+
+## 👥 Equipo
+Proyecto desarrollado por 4 compañeros del Máster en IA, Cloud y DevOps (Pontia):
+    - Manuel Yerbes García
+    - Marvin Bernal
+    - Enmanuel De Oleo
+    - Claudi Berenguer Sabaté
