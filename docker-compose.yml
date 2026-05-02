@@ -1,0 +1,17 @@
+
+services:
+  db:
+    image: postgis/postgis:15-3.4
+    container_name: geoyield_db
+    environment:
+      - POSTGRES_USER=geo_user
+      - POSTGRES_PASSWORD=g3o_p@ssw0rdAI
+      - POSTGRES_DB=geoyield_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgis_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+volumes:
+  postgis_data:
