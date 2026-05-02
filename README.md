@@ -1,102 +1,95 @@
-# GEO-YIELD-AI
-
-**Geo-Yield-AI** es una plataforma SaaS de *Location Intelligence* diseñada para transformar la toma de decisiones en la expansión de cadenas de retail, negocios, franquicias y consultoras inmobiliarias. 
-
-Utilizamos un enfoque de **Agente de IA Autónomo** que combina Big Data de movilidad, análisis sociodemográfico y validación normativa instantánea mediante arquitectura RAG.
-
-## 📖 Tabla de Contenidos
-- [Propuesta de Valor](#-propuesta-de-valor)
-- [Características Principales](#-características-principales)
-- [Stack Tecnológico](#-stack-tecnológico)
-- [Arquitectura del Sistema](#-arquitectura-del-sistema)
-- [Instalación y Uso](#-instalación-y-uso)
-- [DevOps y Despliegue](#-devops-y-despliegue)
-- [Equipo](#-equipo)
+# Simple ML Training Project
 
 ---
 
-## 💡 Propuesta de Valor
+## Integrantes del Grupo 5
 
-### El Problema
-Abrir un nuevo local comercial conlleva un alto riesgo financiero. Las decisiones suelen basarse en intuiciones o estudios de mercado lentos (semanas) y costosos, que a menudo ignoran las complejas normativas urbanísticas locales (PGOU).
+- Guillermo Parés
+- Sheila Pena
+- Claudi Berenguer
+- Carlos Fernández
 
-### La Solución
-**Geo-Yield-AI** actúa como un consultor inmobiliario 360° que reduce el tiempo de evaluación de semanas a segundos:
-* **Validación Hiper-Local:** Mapas de calor de afluencia peatonal real.
-* **Inteligencia Legal:** Interpretación automática de leyes urbanas para confirmar la viabilidad de licencias.
-* **Análisis de Mercado:** Perfilado demográfico y mapeo de la competencia.
-
+## Enlaces
+proyecto en render: https://pontia-mlops-tutorial-grupo5.onrender.com/
+proyecto blueprint: https://pontia-mlops-tutorial-grupo5-render.onrender.com/
+repositorio github: https://github.com/carlos-fernandez-ruiz/pontia-mlops-tutorial-grupo5/
 ---
 
-## ✨ Características Principales
+## Trabajo realizado
 
-1. **Análisis de Movilidad Dinámica:** Procesamiento de Big Data del **MITMA** (Ministerio de Transportes) para identificar flujos de personas.
-2. **Motor RAG Legal:** Uso de **LlamaIndex** y **pgvector** para consultar normativas urbanísticas sin alucinaciones.
-3. **Perfilado Sociodemográfico:** Filtros por niveles de renta, edad y densidad de población.
-4. **Semáforo de Viabilidad:** Informe ejecutivo (Verde/Ámbar/Rojo) sobre la factibilidad técnica y legal.
+### 1. Configuración inicial del repositorio
 
----
+- Creación del repositorio en GitHub para el grupo 5.
+- Copia del contenido del repositorio base visto en clase.
+- Actualización del `.gitignore`.
+- Generación de `requirements.txt` con las librerías necesarias para el proyecto.
+- Initial commit con la estructura base revisada del proyecto.
 
-## 🛠️ Stack Tecnológico
+### 2. Pipeline de integración continua (CI)
 
-| Capa | Tecnología |
-| :--- | :--- |
-| **Lenguaje** | Python 3.10+ |
-| **IA / RAG** | LlamaIndex, OpenAI GPT-4o / Claude 3.5 |
-| **Backend** | FastAPI |
-| **Frontend** | Vue.js (Mapas interactivos) |
-| **Base de Datos** | Supabase (PostgreSQL/PostGIS + pgvector) |
-| **Data Science** | Pandas, GeoPandas |
-| **DevOps** | Docker, GitHub Actions, CI/CD |
+Se ha creado la carpeta `.github/workflows/` con el fichero `integration.yml`, que define el pipeline de integración continua en GitHub Actions. Los cambios respecto al pipeline original visto en clase son:
 
----
+- **Versión de Python**: se fija a `3.10` para garantizar compatibilidad.
+- **Instalación de dependencias**: se cambia el comando de instalación para usar `pip install -r requirements.txt`.
+- **Tolerancia a fallos en tests**: el pipeline se completa aunque los tests fallen, pero notifica el error al final del job.
+- **Comentario de resultados en PR**: se corrige el campo `issue_number` usando `context.payload.pull_request.number` para que el comentario con los resultados y la cobertura se publique correctamente en el PR (evitando el fallo que se producía en clase al no identificar el número de PR).
 
-## 🏗️ Arquitectura del Sistema
+### 3. Validación del pipeline y revisión de PR
 
-El flujo de datos sigue una estructura **Cloud-Native**:
-1. **Ingesta:** Carga de datasets MITMA, del INE, del GenCAT y PDFs normativos.
-2. **Procesamiento:** Normalización con GeoPandas y creación de embeddings.
-3. **Orquestación:** FastAPI coordina las peticiones del usuario con el motor RAG.
-4. **Veredicto:** El LLM genera un informe basado en el contexto recuperado de la base vectorial.
+- Se abrió una PR con los cambios del `integration.yml` y Sheila actuó como reviewer, aprobándola con el comentario *"looks good to me"*.
+- Se validó que el pipeline se ejecuta correctamente de extremo a extremo.
 
----
+### 4. Despliegue en Render
 
-## 🚀 Instalación y Uso
+- Se creó el web service en Render siguiendo el mismo proceso que en clase.
+- Al ejecutarlo, se produjo un error relacionado con la carpeta `deployment`, que todavía no existe en el repositorio. Queda pendiente de resolver.
 
-### Requisitos previos
-* Docker instalado
-* Python 3.10 o superior
-* Claves de API de OpenAI/Anthropic y Supabase
+### 5. Ruleset para la rama main
 
-### Pasos para ejecución local
-1. **Clonar el repositorio:**
-   ```bash
-   git clone [https://github.com/TU_USUARIO/pj-geo-yield-ai.git](https://github.com/TU_USUARIO/pj-geo-yield-ai.git)
-   cd pj-geo-yield-ai
+- Se configuró una ruleset en GitHub para proteger la rama `main` con los requisitos indicados en el enunciado.
 
-2. **Configurar el entorno:**
-Crea un archivo .env basado en .env.example con tus credenciales de API.
+### 6. Validación del flujo completo con "cambio chorra"
 
-3. Instalar dependencias:
-    ```bash
-    pip install -r requirements.txt
+- Se añadió el secreto `RENDER_DEPLOY_HOOK` en GitHub para permitir el despliegue automático desde el pipeline.
+- Se realizó un cambio en el `README.md` para verificar que:
+  - El pipeline se ejecuta al abrir una PR.
+  - La ruleset bloquea el merge hasta que se cumplan los requisitos.
+  - Sheila revisó y aprobó la PR, validando el flujo completo.
 
-4. Ejecutar la aplicación:
-    ```bash
-    XXXX
+### 7. Pipeline de build (`build.yml`)
 
-## 🔄 DevOps y Despliegue
-Este proyecto aplica los conocimientos de ingeniería adquiridos en el Máster:
+- Se ha configurado el fichero `build.yml` en `.github/workflows/` usando como base el fichero proporcionado por el profesor en Google Drive (carpeta de evaluación).
+- Se han aplicado las modificaciones vistas en clase:
+  - Descarga del dataset necesario para el entrenamiento.
+  - Actualización y publicación del modelo entrenado en la sección de **Releases** de GitHub.
+- Se creó una PR con estos cambios. Tras algunos fallos iniciales en el pipeline por equivocación nuestra en el código, Sheila revisó y aprobó la PR, integrando el workflow de build en `main`.
 
-    - Contenedores: Imagen Docker para asegurar que el entorno de desarrollo sea idéntico al de producción.
 
-    - CI/CD: Pipelines en GitHub Actions para despliegue automático en Render o Railway.
+### 8. Pipeline de deploy (`deploy.yml`)
 
-    - Observabilidad: Monitorización básica de latencias en las llamadas al LLM.
+- Se ha clonado el repositorio del grupo a local para seguir con el ejercicio
+- Se ha configurado el fichero `deploy.yml` en `.github/workflows/` usando como base el fichero proporcionado por el profesor.
+- Se copia el directorio `deployment`, con el endpoint y sus dependencias el directorio `app`, tal cual de la documentación del ejecrcicio.
+- Se usa proyecto `Render` preexistente asociado a este repositorio
+- `deploy.yml` llama a `Render` con el webhook contenido en 'secret' *RENDER_DEPLOY_HOOK* de este repositorio
+- Se crea rama `deploy` en local, se hace un commit de los cambios sobre ella y se hace un push a este repositorio
+- `Render`tiene actiavado por defecto *auto-deploy*,  con lo que con cada nuevo commit a la rama conectada - main en este caso -, si pasa los test, el servicio se despliega de nuevo.  `deploy` se llama vía *workflow dispatch* y llama a `Render`, por lo que no se desa *auto-deploy*. Se desactiva. Documentación: [Render auto-deploy](https://render.com/docs/deploys)
 
-## 👥 Equipo
-Proyecto desarrollado por 4 compañeros del Máster en IA, Cloud y DevOps (Pontia):
-    - Manuel Yerbes García
-    - Marvin Bernal
-    - Enmanuel De Oleo
-    - Claudi Berenguer Sabaté
+### 9. Rollback 
+
+- En el contexto de devops un rollback es: 'En el contexto de DevOps, un rollback (o reversión) es el proceso de restaurar una aplicación, servicio o infraestructura a un estado estable anterior inmediatamente después de que una nueva implementación (deploy) o cambio haya causado problemas, errores o fallas inesperadas'
+- En `Render`, en la pestaña *Events*, se puede ver el listado de deploys y hacer rollabk a uno de ellos
+- Otra opción que se ha planteado es modificar el `deploy.yml` para que permita seleccionar versión de la API y modelo a desplegar en `Render`. Para ello:
+  - Se asume que a los commit que són para deploy se les asigna un tag. Los tags van siempre en orden creciente
+  - Cuando se hace el push, además de la rama también se debe hacer un push de los tag (git push --tags), dado que por defecto se quedan en local
+  - Se introducen 2 inputs, *api_verion* y *model_version* ambos con default a *latest*. En el primero se puede integar el tag que se corresponde a la versión de la API que se desea y en el segundo el tag de la release del modelo
+  - En `deploy`se hace un *git checkout* al tag especificado. Si se ha dejado en *latest*, lo hace al tag más alto (más reciente)
+  - Se ha creado una variable de entorno en el repositorio llamada *MODEL_RELEASE* que se rellena con lo entrado en *model_version* Esta variable de entorno es usada por *app/main.py* para cargar el modelo deseado. Si se ha dejado en *latest*, se carga el más reciente
+
+
+## Pendiente
+
+#### Por parte de todos
+
+- **Simulación de Rollback**: informarse sobre en qué consiste y cómo implementarla en el contexto del proyecto.
+- **Revisión del entregable**: verificar conjuntamente que se cumplen todos los requisitos del enunciado antes de la entrega.
