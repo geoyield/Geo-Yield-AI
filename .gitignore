@@ -1,0 +1,27 @@
+# ========================
+# PYTHON & ENVIRONMENTS
+# ========================
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+
+# ========================
+# DATA LAKE 
+# ========================
+data/
+*.csv
+*.zip
+*.tar
+*.tar.gz
+*.shp
+*.geojson
+
+# ========================
+# IDEs & SECRETS
+# ========================
+.vscode/
+.idea/
+.env
