@@ -20,9 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
-
-      - uses: actions/checkout@v4
+        uses: actions/checkout@v4  # v3 no permite fetch de tags, lo que es necesario para poder hacer checkout a una versión específica del api si no se quiere desplegar la última, por eso se usa v4
         with:
           fetch-depth: 0  # Fetch all tags and history
       

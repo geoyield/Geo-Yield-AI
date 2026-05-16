@@ -34,6 +34,7 @@ jobs:
       
       - name: Train and save model
         run: |
+          mkdir -p models
           python src/main.py
           
       - name: Run model tests

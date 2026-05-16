@@ -2,18 +2,17 @@ from pydantic import BaseModel, Field, field_validator
 from datetime import datetime, timezone
 import logging
 import os
-from dotenv import load_dotenv
 
-# Load environment variables from .env file
-env_path = os.path.join(os.path.dirname(__file__), '..', 'env', '.env')
-load_dotenv(env_path)
+logger = logging.getLogger("geoyield_api")
 
-logger = logging.basicConfig(
-    level=int(os.getenv('LOG_LEVEL', '20')),
-    format="%(asctime)s [%(levelname)s] : %(message)s"
-)
-logger = logging.getLogger(__name__)
+#####################
+## MODELO DE DATOS ##
+#####################
 
+# El modelo de datos se define utilizando Pydantic, lo que permite validar los datos de entrada y salida de la API de manera sencilla y eficiente.
+
+# Lo que se muestra abajo es solamente a modo de plantilla, para tener una idea inicial de como desplegarlo
+# cuando se disponga de la arquitectura a alto nivel de la aplicación, lo que inluye los enpoints básicos, se va a definir
 
 class TaskCreate(BaseModel):
     titulo: str = Field(min_length=1, description="Título de la tarea")

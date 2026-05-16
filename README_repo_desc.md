@@ -36,7 +36,7 @@ Descripción de archivos y directorios:
     - `Dockerfile_api`: imagen para un container con la api. Debe estar alineado en version de python con la usada en el desarrollo en local y la del CI en github. Lo llama docker-compose para crear el container en *Render*
     - `Dockerfile_db`: imagen para la base de datos. Lo llama docker-compose para crear el container en *Render*. Tmaibén debe llamarse en local para crear la base de datos y exponerla en un puerto, para poder hacer el debug. Si el modelo incluye una base de datos, entonces deberá incluirse en `integrate.yml`, la acción deberá crear el container en github actions (https://docs.github.com/en/actions/tutorials/use-containerized-services/create-a-docker-container-action)
     - `docker-compose.yml`: llama a los dockerfile, crea los volumenes `metrics`, `log`, `env` y el propio de la base de datos para dar persistencia, une el container de la api con la base de datos por un bridge, gestiona la dependencia de la api de la base de datos en la incialización        
-- 
+  
 - Otros:
   - `.venv`: es el entorno virtual
   - `.gitignore`

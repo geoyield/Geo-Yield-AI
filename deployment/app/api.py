@@ -11,22 +11,29 @@ import pandas as pd
 from pathlib import Path
 from dotenv import load_dotenv
 import metrics
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker, declarative_base
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# en la variable de entorno LOG_LEVEL se configura el nivel de logging, que se carga desde el archivo .env a través de load_dotenv() y se utiliza para configurar el logging.basicConfig() en main.py, lo que permite controlar la cantidad de información que se registra en los logs sin necesidad de modificar el código, simplemente cambiando el valor de LOG_LEVEL en el archivo .env
+logger = logging.getLogger("geoyield_api")
 
 scaler = None
 model = None
 encoders = None
+db_engine = None
 
 temp_files = []
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     
+    global scaler, model, encoders, db_engine
+
     try:
         # Get GitHub repo info from environment or use defaults
-        github_repo = os.getenv("GITHUB_REPO", "tu-usuario/tu-repo")
+        github_repo = os.getenv("GITHUB_REPO")
+        
+        # Get model version from MODEL_VERSION environment variable, which is set at deploy time, in the input section of deply.yml
         model_version = os.getenv("MODEL_VERSION", "latest")
 
         # Download release from GitHub. latest is the default, but you can specify a tag if needed
@@ -75,6 +82,9 @@ async def lifespan(app: FastAPI):
             temp_files.append(encoders_path)
         encoders = joblib.load(encoders_path)
         logger.info("Encoders loaded successfully")
+
+        # Open databaase connection
+        db_engine = create_engine(os.getenv("DATABASE_URL"), connect_args={"check_same_thread": False})
         
     except Exception as e:
         logger.error(f"Failed to load artifacts: {e}")
@@ -90,11 +100,9 @@ async def lifespan(app: FastAPI):
         except:
             pass
 
-# Load environment variables from .env file
-env_path = os.path.join(os.path.dirname(__file__), 'env', '.env')
-load_dotenv(env_path)
-
 app = FastAPI(lifespan=lifespan)
+
+SessionLocal = sessionmaker(bind=db_engine, autocommit=False, autoflush=False)
 
 @app.get("/health")
 def health():
