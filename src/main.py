@@ -52,16 +52,16 @@ def main():
     logger.info(f"Saving artifacts to {MODEL_DIR}...")
     model_path = MODEL_DIR / "model.pkl"
     joblib.dump(model, model_path)
-    logger.info(f"✓ Model saved to {model_path}")
+    logger.info(f"[OK] Model saved to {model_path}")
 
     joblib.dump(scaler, MODEL_DIR / "scaler.pkl")
-    logger.info(f"✓ Scaler saved to {MODEL_DIR / 'scaler.pkl'}")
+    logger.info(f"[OK] Scaler saved to {MODEL_DIR / 'scaler.pkl'}")
     
     joblib.dump(encoders, MODEL_DIR / "encoders.pkl")
-    logger.info(f"✓ Encoders saved to {MODEL_DIR / 'encoders.pkl'}")
+    logger.info(f"[OK] Encoders saved to {MODEL_DIR / 'encoders.pkl'}")
 
     total_time = time.time() - script_start
-    logger.info(f"✅ Training pipeline completed in {total_time:.2f} seconds")
+    logger.info(f"[DONE] Training pipeline completed in {total_time:.2f} seconds")
     logger.info(f"Model ready for deployment!")
 
 if __name__ == "__main__":

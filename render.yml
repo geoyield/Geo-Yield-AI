@@ -1,12 +1,12 @@
 # Exported from Render on 2026-04-27T17:45:11Z
 version: "1"
 projects:
-- name: My project
+- name: geoyield
   environments:
   - name: Production
     services:
     - type: web
-      name: pontia-mlops-tutorial-grupo5-render-blueprint
+      name: geoyield-blueprint
       runtime: python
       repo: https://github.com/carlos-fernandez-ruiz/pontia-mlops-tutorial-grupo5
       plan: free
