@@ -19,7 +19,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: 'Python 3.12.13'
+          python-version: 'Python 3.12'
 
       - name: Install dependencies
         run: |
