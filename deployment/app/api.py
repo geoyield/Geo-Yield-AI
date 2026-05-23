@@ -9,30 +9,36 @@ import requests
 import tempfile
 import pandas as pd
 from pathlib import Path
+from dotenv import load_dotenv
+from .metrics.metrics import metrics
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker, declarative_base
 
-metrics = {"total_predictions": 0}
+# en la variable de entorno LOG_LEVEL se configura el nivel de logging, que se carga desde el archivo .env a través de load_dotenv() y se utiliza para configurar el logging.basicConfig() en main.py, lo que permite controlar la cantidad de información que se registra en los logs sin necesidad de modificar el código, simplemente cambiando el valor de LOG_LEVEL en el archivo .env
+logger = logging.getLogger("geoyield_api")
 
-model = None
 scaler = None
+model = None
 encoders = None
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+db_engine = None
 
 temp_files = []
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global model, scaler, encoders, temp_files
     
+    global scaler, model, encoders, db_engine   
+
     try:
         # Get GitHub repo info from environment or use defaults
-        github_repo = os.getenv("GITHUB_REPO", "tu-usuario/tu-repo")
-        model_version = os.getenv("MODEL_VERSION", "latest")
+        github_repo = os.getenv("GITHUB_REPO")
+        
+        # Get model version from MODEL_VERSION environment variable, which is set at deploy time, in the input section of deply.yml
+        model_release = os.getenv("MODEL_RELEASE", "latest")
 
         # Download release from GitHub. latest is the default, but you can specify a tag if needed
         logger.info(f"Fetching latest release from {github_repo}...")
-        if model_version != "latest":
+        if model_release != "latest":
             response = requests.get(f"https://api.github.com/repos/{github_repo}/releases/tags/{model_version}")
         else:
             response = requests.get(f"https://api.github.com/repos/{github_repo}/releases/latest")
@@ -76,6 +82,10 @@ async def lifespan(app: FastAPI):
             temp_files.append(encoders_path)
         encoders = joblib.load(encoders_path)
         logger.info("Encoders loaded successfully")
+
+        # Open databaase connection and ge
+        db_engine = create_engine(os.getenv("DATABASE_URL"), connect_args={"check_same_thread": False})
+        
         
     except Exception as e:
         logger.error(f"Failed to load artifacts: {e}")
@@ -93,13 +103,18 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+def get_session():
+    """Create a database session - called after db_engine is initialized in lifespan"""
+    if db_engine is None:
+        raise RuntimeError("Database engine not initialized yet")
+    return sessionmaker(bind=db_engine, autocommit=False, autoflush=False)()
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
 @app.post("/predict")
 async def predict(request: Request):
-    global model, scaler, encoders
     start = time.time()
     
     try:
@@ -129,3 +144,5 @@ async def predict(request: Request):
 @app.get("/metrics", response_class=PlainTextResponse)
 def metrics_endpoint():
     return f'total_predictions {metrics["total_predictions"]}\n'
+
+
