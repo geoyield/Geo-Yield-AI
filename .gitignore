@@ -10,6 +10,7 @@ models/
 
 # --- Data files ---
 data/
+data_raw/
 *.csv
 *.tsv
 *.json
@@ -42,6 +43,7 @@ ENV/
 *.key
 .envrc
 .env.*
+!.env.example
 
 # --- Misc ---
 README_devops_g5.md
