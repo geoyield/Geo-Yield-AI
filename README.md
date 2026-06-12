@@ -9,6 +9,7 @@ Utilizamos un enfoque de **Agente de IA Autónomo** que combina Big Data de movi
 - [Características Principales](#-características-principales)
 - [Stack Tecnológico](#-stack-tecnológico)
 - [Arquitectura del Sistema](#-arquitectura-del-sistema)
+- [Fuentes de Datos](#-fuentes-de-datos)
 - [Instalación y Uso](#-instalación-y-uso)
 - [DevOps y Despliegue](#-devops-y-despliegue)
 - [Equipo](#-equipo)
@@ -59,6 +60,37 @@ El flujo de datos sigue una estructura **Cloud-Native**:
 2. **Procesamiento:** Normalización con GeoPandas y creación de embeddings.
 3. **Orquestación:** FastAPI coordina las peticiones del usuario con el motor RAG.
 4. **Veredicto:** El LLM genera un informe basado en el contexto recuperado de la base vectorial.
+
+---
+
+## 📊 Fuentes de Datos
+
+Cada fuente cubre una pieza distinta del veredicto de viabilidad (movilidad, demografía, competencia y normativa). Todas son **públicas y gratuitas**, lo que mantiene el coste de datos en cero.
+
+### 1. MITMA — Estudios de Movilidad (Ministerio de Transportes)
+
+* **Qué es:** datos agregados y anonimizados de movilidad por telefonía móvil, publicados por el Ministerio de Transportes. Incluyen viajes hora a hora entre distritos (`mobility_flows_hourly`) y población diaria por zona (`zone_population_daily`).
+* **Por qué lo usamos:** es la única fuente pública con **granularidad horaria** sobre el flujo real de personas. El volumen y patrón temporal de movimiento por una zona es uno de los predictores más fuertes de la afluencia potencial a un futuro local — el corazón de la propuesta "Análisis de Movilidad Dinámica".
+* **Alcance:** el dataset cubre toda España agregado por distritos/municipios; durante la descarga se filtra a los **10 distritos de Barcelona** para mantener el volumen manejable (~280 MB/mes en vez de varios GB).
+
+### 2. Open Data BCN — Ayuntamiento de Barcelona
+
+Tres datasets oficiales del ayuntamiento, ya con granularidad de **barrio** (los 73 barrios de Barcelona, mucho más fino que los 10 distritos de MITMA):
+
+* **Censo de actividades comerciales** (`commercial_premises`) — censo de todos los locales en planta baja con su actividad económica, estado (activo/cerrado) y geolocalización. Es la base del **mapeo de la competencia**: permite contar cuántos negocios del mismo sector ya operan en un barrio.
+* **Padrón municipal** (`population_by_neighborhood`) — población por barrio, edad y sexo. Alimenta el **perfilado sociodemográfico**: saber si el barrio tiene el perfil de cliente objetivo (p. ej. población joven para una hamburguesería, mayor poder adquisitivo para un negocio premium).
+* **Renta Familiar Disponible** (`income_by_neighborhood`) — renta disponible per cápita por barrio. Es un indicador directo de **poder adquisitivo**, clave para validar si la zona puede sostener el ticket medio del negocio que se quiere abrir.
+* **Por qué esta fuente:** son datos oficiales, gratuitos y con la granularidad de barrio necesaria para un análisis "hiper-local", complementando la vista de distrito que da MITMA.
+
+### 3. OpenStreetMap (Overpass API) — Puntos de interés
+
+* **Qué es:** ubicaciones (lat/lon) de cafeterías, bares, restaurantes, fast food y pubs dentro de Barcelona, obtenidas vía la API pública Overpass (`osm_pois`).
+* **Por qué lo usamos:** complementa el censo comercial oficial (que puede tener retraso de publicación) con datos **actualizados por la comunidad** y coordenadas precisas, ideales para calcular la densidad de competidores de hostelería en un radio concreto alrededor de una dirección candidata.
+
+### 4. Catastro — Sede Electrónica del Catastro (lookup en vivo)
+
+* **Qué es:** servicio web público (OVC) que, dadas unas coordenadas, devuelve la referencia catastral, el uso del edificio, la superficie total, el año de construcción y el desglose por unidades (`/catastro/parcel`).
+* **Por qué lo usamos:** es el primer paso de la **Inteligencia Legal/Normativa** — antes de validar si una actividad es viable en un local según el PGOU, hay que conocer las características físicas y el uso catastral del propio edificio. Al ser una consulta puntual por dirección (no un dataset masivo), se implementa como **lookup en vivo** en lugar de una ingesta a base de datos: no requiere almacenamiento ni proceso de carga, y siempre devuelve el dato más reciente del Catastro.
 
 ---
 
