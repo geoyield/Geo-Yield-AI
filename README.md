@@ -67,12 +67,13 @@ El flujo de datos sigue una estructura **Cloud-Native**:
 ```
 .
 ├── apps/
-│   └── api/                 # FastAPI: endpoints de movilidad, demografía, competencia y POIs
+│   └── api/                 # FastAPI: endpoints de movilidad, demografía, competencia y POIs (ver apps/api/README.md)
 │       ├── app/
-│       │   ├── main.py      # /health, /zones, /mobility/*, /neighborhoods, /competitors, /demographics/*, /pois, /catastro/parcel
+│       │   ├── main.py      # /health, /zones, /mobility/*, /neighborhoods, /competitors, /demographics/*, /points-of-interest, /catastro/parcel
 │       │   ├── catastro.py   # cliente del webservice OVC del Catastro (lookup en vivo)
 │       │   └── db.py         # conexión SQLAlchemy a Postgres (DATABASE_URL)
 │       ├── Dockerfile
+│       ├── README.md
 │       └── requirements.txt
 ├── infra/
 │   └── db/                  # Postgres con esquema inicial
@@ -97,64 +98,171 @@ El flujo de datos sigue una estructura **Cloud-Native**:
 
 ## 🚀 Instalación y Uso
 
+Guía completa para levantar el proyecto **en local**: base de datos + API + carga de todos los datasets.
+
 ### Requisitos previos
-* Docker y Docker Compose
-* Python 3.10+ (para los scripts de `ingestion/`)
+* [Docker](https://docs.docker.com/get-docker/) y Docker Compose (incluidos en Docker Desktop).
+* Python 3.10+ con `venv`, para los scripts de `ingestion/` (se ejecutan en el host, **no** están dockerizados).
+* `curl` para probar la API (o usa el Swagger UI, ver paso 5).
+* ~500 MB de espacio libre en disco para `data_raw/`.
 
-### 1. Levantar la API y la base de datos
+### Resumen rápido (TL;DR)
 
 ```bash
+# 1. Variables de entorno
 cp .env.example .env
-docker compose up --build
-```
 
-* `api` queda disponible en `http://localhost:8080`:
-  * **Movilidad (MITMA):** `/zones`, `/mobility/flows`, `/mobility/population`
-  * **Barrios y competencia (Open Data BCN):** `/neighborhoods`, `/competitors`, `/demographics/population`, `/demographics/income`
-  * **Puntos de interés (OSM):** `/pois`
-  * **Catastro (lookup en vivo):** `/catastro/parcel?lat=&lon=` — referencia catastral, uso, superficie total, año de construcción y desglose por unidades del edificio en esas coordenadas, vía el webservice OVC de la Sede Electrónica del Catastro (sin necesidad de API key ni descarga previa).
-  * `/health`
-* `db` (Postgres 16) expone el puerto `5433` (host) → `5432` (contenedor) y persiste los datos en el volumen `pgdata`, por lo que `docker compose down` / reinicios no pierden información. Solo `docker compose down -v` borra el volumen.
-* El esquema se crea automáticamente al primer arranque desde `infra/db/init/` (`001_schema.sql`, `002_opendata_bcn.sql`, `003_osm_pois.sql`).
+# 2. Levantar Postgres + API
+docker compose up --build -d
+curl http://localhost:8080/health   # -> {"status":"ok"}
 
-### 2. Descargar datos de movilidad de MITMA (Barcelona)
-
-Con la base de datos levantada (puerto 5433 expuesto en `localhost`):
-
-```bash
+# 3. Cargar todos los datasets (entorno virtual de ingestion/)
 cd ingestion
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-# Descarga el último mes completo de "viajes" y "personas"
-# (por-distritos) a ../data_raw/, sin filtrar (~7 GB)
-python download_mitma_data.py --months 1
+python download_mitma_data.py --months 1 && python load_mitma_data.py
+python download_opendata_bcn.py && python load_opendata_bcn.py
+python download_osm_pois.py && python load_osm_pois.py
+cd ..
 
-# Filtra a los 10 distritos de Barcelona, agrega y carga en Postgres
-python load_mitma_data.py
+# 4. Probar un endpoint con datos
+curl "http://localhost:8080/neighborhoods" | head -c 300
 ```
 
-Ambos scripts son idempotentes: `download_mitma_data.py` no re-descarga ficheros existentes en `data_raw/`, y `load_mitma_data.py` registra cada fichero procesado en `ingestion_state` (usa `--force` para recargar).
+A continuación se explica cada paso en detalle.
 
-Cada mes adicional añade ~7 GB a `data_raw/`. `--months 1` ya cubre un mes completo de patrones horarios de movilidad y población diaria, suficiente para las features actuales; aumenta `--months` solo si vas a explotar tendencias mensuales/estacionales.
+### 1. Clonar el repositorio y configurar variables de entorno
 
-### 3. Descargar datos de Open Data BCN y OSM (barrios, competencia, POIs)
+```bash
+git clone <url-del-repo>
+cd Geo-Yield-AI
+cp .env.example .env
+```
 
-Con la base de datos levantada y el entorno virtual de `ingestion/` activado:
+`.env.example` ya trae valores válidos para desarrollo local (usuario/contraseña `postgres`, puerto host `5433`, etc.). No es necesario editarlo salvo conflicto de puertos.
+
+### 2. Levantar la base de datos y la API
+
+```bash
+docker compose up --build -d
+```
+
+Esto construye y arranca dos contenedores:
+
+| Servicio | Origen | Puerto host → contenedor | Descripción |
+| :--- | :--- | :--- | :--- |
+| `db` | `infra/db` (Postgres 16) | `5433` → `5432` | Esquema inicial aplicado automáticamente al primer arranque desde `infra/db/init/` (`001_schema.sql`, `002_opendata_bcn.sql`, `003_osm_pois.sql`). Datos persistidos en el volumen `pgdata`. |
+| `api` | `apps/api` (FastAPI) | `8080` → `8080` | Ver [apps/api/README.md](apps/api/README.md) para el detalle de cada endpoint. |
+
+Comprueba que ambos servicios están arriba y la API responde:
+
+```bash
+docker compose ps
+curl http://localhost:8080/health
+# -> {"status":"ok"}
+```
+
+> ⚠️ En este punto la API ya responde, pero las tablas de datos están **vacías**: `/zones`, `/neighborhoods`, `/competitors`, `/points-of-interest`, etc. devolverán `[]` hasta completar el paso 4. `/catastro/parcel` es la excepción: funciona desde ya porque consulta el Catastro en vivo.
+
+Comandos útiles:
+
+```bash
+docker compose logs -f api      # logs en vivo de la API
+docker compose down             # parar (conserva los datos del volumen pgdata)
+docker compose down -v          # parar y borrar también el volumen (reset completo de la BD)
+```
+
+### 3. Preparar el entorno de ingesta (Python)
+
+Los scripts de `ingestion/` descargan los datasets y los cargan en Postgres. Se ejecutan en el **host** (no están dockerizados) y necesitan que `db` esté levantado y accesible en `localhost:5433`.
 
 ```bash
 cd ingestion
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+```
 
-# Censo comercial, padró (población) y renda por barrio (73 barrios de Barcelona)
+Por defecto los scripts se conectan a `postgresql://postgres:postgres@localhost:5433/geoyield` (coherente con `.env.example`). Si cambiaste `POSTGRES_HOST_PORT` o las credenciales, exporta `DATABASE_URL` antes de ejecutar cualquier script:
+
+```bash
+export DATABASE_URL=postgresql://postgres:postgres@localhost:5433/geoyield
+```
+
+### 4. Cargar los datasets
+
+Con el entorno virtual activado y `cd ingestion`, ejecuta en orden:
+
+#### 4.1 Movilidad MITMA (Barcelona)
+
+```bash
+# Descarga el último mes completo de "viajes" y "personas" (por-distritos),
+# filtrando a las filas relacionadas con Barcelona durante la descarga (~280 MB)
+python download_mitma_data.py --months 1
+
+# Agrega por hora/día y carga en Postgres
+python load_mitma_data.py
+```
+
+#### 4.2 Open Data BCN (barrios, censo comercial, población, renta)
+
+```bash
+# Censo comercial, padró (población) y renta por barrio (73 barrios de Barcelona, ~27 MB)
 python download_opendata_bcn.py
 python load_opendata_bcn.py
+```
 
-# Cafeterías, bares, restaurantes, fast food y pubs (Overpass API / OSM)
+#### 4.3 OSM (puntos de interés de hostelería)
+
+```bash
+# Cafeterías, bares, restaurantes, fast food y pubs vía Overpass API (~2 MB)
 python download_osm_pois.py
 python load_osm_pois.py
 ```
 
-Ambos pares de scripts son idempotentes: los `download_*.py` no vuelven a descargar ficheros ya presentes en `data_raw/`, y los `load_*.py` cargan un snapshot completo (truncan y recargan las tablas correspondientes en cada ejecución). Estos datasets ya vienen acotados a Barcelona, sin necesidad de filtrado adicional.
+Notas:
+* Todos los `download_*.py` son idempotentes: no vuelven a descargar ficheros ya presentes en `data_raw/`.
+* `load_mitma_data.py` registra cada fichero procesado en `ingestion_state` y solo lo recarga si usas `--force`. Los demás `load_*.py` truncan y recargan sus tablas en cada ejecución (son snapshots completos).
+* `download_osm_pois.py` llama a la API pública de Overpass, que en ocasiones devuelve `504 Gateway Timeout` bajo carga. Si falla, vuelve a ejecutar el mismo comando.
+
+### 5. Verificar que los datos están cargados
+
+```bash
+curl "http://localhost:8080/zones"
+curl "http://localhost:8080/neighborhoods"
+curl "http://localhost:8080/competitors?neighborhood_code=1&limit=5"
+curl "http://localhost:8080/demographics/population?neighborhood_code=1&limit=5"
+curl "http://localhost:8080/demographics/income?neighborhood_code=1"
+curl "http://localhost:8080/points-of-interest?category=cafe&limit=5"
+curl "http://localhost:8080/mobility/flows?limit=5"
+curl "http://localhost:8080/catastro/parcel?lat=41.3851&lon=2.1734"
+```
+
+También puedes explorar y probar todos los endpoints de forma interactiva en **`http://localhost:8080/docs`** (Swagger UI).
+
+### 6. Reiniciar / reset completo
+
+```bash
+docker compose down -v      # borra el volumen de Postgres (esquema y datos)
+docker compose up --build -d
+
+cd ingestion && source .venv/bin/activate
+# data_raw/ ya tiene los ficheros descargados, no hace falta volver a descargar
+python load_mitma_data.py
+python load_opendata_bcn.py
+python load_osm_pois.py
+```
+
+### Solución de problemas
+
+| Problema | Causa / solución |
+| :--- | :--- |
+| `bind: address already in use` en `5433` u `8080` | Otro proceso usa ese puerto. Cambia `POSTGRES_HOST_PORT` en `.env`, o detén el proceso que lo ocupa. |
+| Los endpoints devuelven `[]` | La tabla correspondiente está vacía. Revisa que los `load_*.py` del paso 4 se ejecutaron sin errores. |
+| `download_osm_pois.py` → `504 Gateway Timeout` | La API pública de Overpass está saturada; reintenta el mismo comando. |
+| Error de conexión en los scripts de `ingestion/` | Comprueba que `docker compose ps` muestra `db` como `running` y que `DATABASE_URL`/puerto `5433` son correctos. |
+| `docker compose up` falla al construir | Asegúrate de que Docker (Desktop) está corriendo y de tener permisos sobre el directorio del proyecto. |
 
 ## 🔄 DevOps y Despliegue
 Este proyecto aplica los conocimientos de ingeniería adquiridos en el Máster:

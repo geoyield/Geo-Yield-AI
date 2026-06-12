@@ -183,8 +183,8 @@ def income_by_neighborhood(neighborhood_code: int | None = None, limit: int = 10
         return [dict(row) for row in rows]
 
 
-@app.get("/pois")
-def list_pois(category: str | None = None, limit: int = 1000):
+@app.get("/points-of-interest")
+def list_points_of_interest(category: str | None = None, limit: int = 1000):
     conditions = []
     params: dict = {"limit": limit}
 
