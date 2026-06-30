@@ -1,0 +1,38 @@
+name: Integration
+
+on:
+  workflow_dispatch:
+  pull_request:
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run tests and save exit code
+        id: tests
+        run: |
+            mkdir -p test-results
+            PYTHONPATH=. pytest unit_tests/ --capture=tee-sys --cov=src --cov-report=term --cov-report=html --junitxml=test-results/results.xml > test-results/results.log
+
+      - name: Fail the job if tests failed
+        if: steps.tests.outcome == 'failure'
+        run: exit 1
+        
