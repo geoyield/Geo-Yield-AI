@@ -24,15 +24,23 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r backend/requirements.txt
 
-      - name: Run tests and save exit code
+      - name: Run tests and capture logs
         id: tests
+        continue-on-error: true  
         run: |
-            mkdir -p test-results
-            PYTHONPATH=. pytest unit_tests/ --capture=tee-sys --cov=src --cov-report=term --cov-report=html --junitxml=test-results/results.xml > test-results/results.log
+          mkdir -p test-results
+          PYTHONPATH=backend pytest tests/ --capture=tee-sys --cov=backend --cov-report=term --cov-report=html --junitxml=test-results/results.xml > test-results/results.log
+
+      - name: Upload Test Results Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-results
+          path: test-results/
 
       - name: Fail the job if tests failed
         if: steps.tests.outcome == 'failure'
-        run: exit 1
-        
+        run: |
+          echo "La suite de pruebas unitarias o de modelo ha fallado. Revisa el artefacto 'pytest-results' para ver los logs."
+          exit 1
