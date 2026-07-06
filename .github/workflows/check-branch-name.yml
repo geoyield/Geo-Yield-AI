@@ -12,6 +12,10 @@ jobs:
         run: |
           branch="${{ github.head_ref }}"
           echo "Branch name: $branch"
+          if [[ "$branch" == "develop" || "$branch" == "main" ]]; then
+            echo "Branch '$branch' is a core Git-Flow branch. Bypassing naming validation."
+            exit 0
+          fi
           if ! echo "$branch" | grep -qE '^(feat|fix|hotfix|chore|docs|refactor|test|release)/.+'; then
             echo "Invalid branch name: '$branch'"
             echo "Must follow: <type>/<description>"
