@@ -1,0 +1,1 @@
+-- Scripts PostGIS de la ciudad piloto y carga inicial de vectores
