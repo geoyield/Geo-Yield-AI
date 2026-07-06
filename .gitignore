@@ -1,3 +1,6 @@
+# FRONT
+frontend/node_modules/
+
 # --- ML & data artifacts ---
 mlruns/
 artifacts/
