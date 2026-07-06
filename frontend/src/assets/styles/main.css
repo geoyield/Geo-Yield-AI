@@ -1,0 +1,36 @@
+/* Variables globales */
+:root {
+  --color-bg-primary: #F5F1EB;
+  --color-bg-secondary: #EBE5DD;
+  --color-text-primary: #1A1A1A;
+  --color-text-secondary: #6B6B6B;
+  --color-accent: #E07A5F;
+  --color-accent-hover: #D46A50;
+  --color-border: #DCD5CD;
+  --color-white: #FFFFFF;
+  --shadow-soft: 0 4px 20px rgba(0, 0, 0, 0.08);
+  --shadow-medium: 0 8px 30px rgba(0, 0, 0, 0.12);
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  background-color: var(--color-bg-primary);
+  background-image: 
+    linear-gradient(var(--color-bg-secondary) 1px, transparent 1px),
+    linear-gradient(90deg, var(--color-bg-secondary) 1px, transparent 1px);
+  background-size: 20px 20px;
+  color: var(--color-text-primary);
+  line-height: 1.6;
+}
+
+#app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
