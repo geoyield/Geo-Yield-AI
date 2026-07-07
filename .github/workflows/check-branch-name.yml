@@ -23,3 +23,15 @@ jobs:
             exit 1
           fi
           echo "Branch name is valid"
+      - name: Enforce Git-Flow (Only allow develop to main)
+        run: |
+          target_branch="${{ github.base_ref }}"
+          source_branch="${{ github.head_ref }}"
+          echo "Target branch: $target_branch"
+          echo "Source branch: $source_branch"
+
+          if [[ "$target_branch" == "main" && "$source_branch" != "develop" ]]; then
+            echo "ERROR: Violación de Git-Flow. Solo se permiten Pull Requests hacia 'main' desde la rama 'develop'."
+            exit 1
+          fi
+          echo "Git-Flow branch alignment is valid."
