@@ -31,7 +31,7 @@ jobs:
         continue-on-error: true  
         run: |
           mkdir -p test-results
-          PYTHONPATH=backend pytest unit_tests/ --capture=tee-sys --cov=backend --cov-report=term --cov-report=html --junitxml=test-results/results.xml > test-results/results.log
+          PYTHONPATH=. pytest tests/unit_tests/ --capture=tee-sys --cov=backend --cov-report=term --cov-report=html --junitxml=test-results/results.xml > test-results/results.log
 
       - name: Upload Test Results Artifact
         uses: actions/upload-artifact@v4
