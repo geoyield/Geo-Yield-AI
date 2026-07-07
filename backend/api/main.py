@@ -29,7 +29,7 @@ logging.basicConfig(level=log_level,
 logger = logging.getLogger("geoyield_api")    
 
 if __name__ == "__main__":
-    uvicorn.run("app.api:app", host="0.0.0.0", port=8000
+    uvicorn.run("api.api:app", host="0.0.0.0", port=8000
                 ,log_level=log_level
                 ,reload=True
                 )

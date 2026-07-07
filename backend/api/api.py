@@ -11,6 +11,8 @@ import pandas as pd
 from pathlib import Path
 from dotenv import load_dotenv
 from .metrics.metrics import metrics
+from .models.business import get_business_table
+from .routers import business
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 
@@ -27,7 +29,17 @@ temp_files = []
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     
-    global scaler, model, encoders, db_engine   
+    global scaler, model, encoders, db_engine
+
+    try:
+        db_engine = create_engine(os.getenv("DATABASE_URL"))
+        app.state.db_engine = db_engine
+        app.state.business_table = get_business_table(db_engine)
+        logger.info("Database engine ready, business_census table reflected")
+    except Exception as e:
+        logger.error(f"Failed to set up database/business table: {e}")
+        app.state.db_engine = None
+        app.state.business_table = None
 
     try:
         # Get GitHub repo info from environment or use defaults
@@ -83,14 +95,11 @@ async def lifespan(app: FastAPI):
         encoders = joblib.load(encoders_path)
         logger.info("Encoders loaded successfully")
 
-        # Open databaase connection and ge
-        db_engine = create_engine(os.getenv("DATABASE_URL"), connect_args={"check_same_thread": False})
-        
-        
     except Exception as e:
-        logger.error(f"Failed to load artifacts: {e}")
-        raise
-    
+        # Not fatal: the ML /predict endpoint will be unavailable, but business-data
+        # endpoints (which don't depend on the model) should still come up.
+        logger.error(f"Failed to load model artifacts, /predict will be unavailable: {e}")
+
     yield
     
     # Cleanup
@@ -102,6 +111,7 @@ async def lifespan(app: FastAPI):
             pass
 
 app = FastAPI(lifespan=lifespan)
+app.include_router(business.router)
 
 def get_session():
     """Create a database session - called after db_engine is initialized in lifespan"""

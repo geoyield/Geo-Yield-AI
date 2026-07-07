@@ -2,21 +2,25 @@ services:
 
   postgis:
     # se utiliza la imagen oficial de postgis, que incluye tanto postgresql como postgis, lo que permite tener una base de datos geoespacial lista para usar sin necesidad de configuraciones adicionales
-    image: postgis/postgis:18-master
+    # 18-master has no linux/arm64 build (breaks on Apple Silicon); 16-3.4 is a stable multi-arch tag
+    image: postgis/postgis:16-3.4
     container_name: geoyield_db
     env_file:
-      - .env # se cargan las variables de entorno desde el archivo .env ubicado en el mismo directorio que el docker-compose.yml, lo que permite configurar fácilmente el usuario, contraseña y base de datos sin necesidad de modificar el docker-compose.yml directamente
-    environment:
-    # estas variables de entorno son las que se utilizan para configurar la base de datos postgresql, y se corresponden con los valores definidos en el archivo .env, lo que permite una configuración flexible y segura sin necesidad de hardcodear estos valores en el docker-compose.yml
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      # POSTGRES_DB/USER/PASSWORD are read straight from this file into the container env --
+      # no separate `environment:` block needed (and one would actually break this: compose's
+      # ${VAR} substitution looks for a .env next to this file, not at env_file's path, so it
+      # would silently resolve to empty strings and override what env_file just set).
+      - ../.env
     # la base de datos se expone solo a la red interna de docker, no al host, por eso se usa 'expose' en lugar de 'ports'
     expose:
       - "5432"
-    # se monta un volumen para persistir los datos de la base de datos, mapeando al directorio en el contenedor indicado en la documentación oficial de la imagen (dockerhub)
+    # se monta el volumen justo en /var/lib/postgresql/data (el path que la imagen declara como
+    # VOLUME en su Dockerfile). Si se monta en el padre (/var/lib/postgresql) en vez del path
+    # exacto, Docker sigue creando un volumen anonimo nuevo para /data en cada recreacion del
+    # contenedor -- los datos "persistian" solo mientras el mismo contenedor seguia vivo, y se
+    # perdian en cada `docker compose down` + `up`.
     volumes:
-      - geoyield_db:/var/lib/postgresql
+      - geoyield_db:/var/lib/postgresql/data
     # la api y la base de datos se encuentran ane una red interna tipo bridge para que puedan comunicarse entre sí, pero no estén expuestas al host
     networks:
       - geoyield_net
@@ -24,18 +28,20 @@ services:
     # con esto se da un periodo de gracia de 30 segundos a partrie de cual se lanzan hasta 5 pings antes de declara la base de datos 'unhealty'
     # se da 5s hasta dar u ping por fallido y se reintentan cada 10s, lo que da un margen de hasta 1 minuto para que la base de datos esté lista antes de que el api deje de intentar conectar
     healthcheck:
-      test: ["CMD", "geoyield", "ping", "-h", "127.0.0.1"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 30s
 
-  api: 
-    # la imagen se construye a partir del Dockerfile ubicado en el mismo directorio que el docker-compose.yml, lo que permite incluir todas las dependencias necesarias para ejecutar el api, incluyendo el conector de mariadb para python
-    build: ./
+  api:
+    # el contexto de build es la raiz del repo (".."), no el directorio deployment/, para poder copiar el codigo de backend/ dentro de la imagen
+    build:
+      context: ..
+      dockerfile: deployment/Dockerfile
     container_name: geoyield_api
     env_file:
-      - .env # se cargan las variables de entorno desde el archivo .env ubicado en el mismo directorio que el docker-compose.yml, lo que permite configurar fácilmente la cadena de conexión a la base de datos sin necesidad de modificar el docker-compose.yml directamente
+      - ../.env # se cargan las variables de entorno desde el archivo .env ubicado en el mismo directorio que el docker-compose.yml, lo que permite configurar fácilmente la cadena de conexión a la base de datos sin necesidad de modificar el docker-compose.yml directamente
     # se expone al host en el puerto 8080, mapeando al puerto 8000 del contenedor donde se ejecuta el api, lo que permite acceder al api desde el host a través de localhost:8080
     ports:
       - "8080:8000"
@@ -52,11 +58,36 @@ services:
         # solventa el problema de que el api intente conectar a la base de datos antes de que esta esté inicializada y lista para aceptar conexiones, lo que provoca errores de conexión
         condition: service_healthy
 
+  ingestion:
+    # job de ETL bajo demanda: descarga el censo de Open Data BCN y lo vuelca en Postgres.
+    # no es un servicio de larga duracion: se lanza puntualmente con `docker compose run --rm ingestion`
+    # (por ejemplo desde un cron del host, semanalmente, dado que el dataset se actualiza en lotes, no en tiempo real)
+    # el profile lo excluye de un `docker compose up` normal, para no re-descargar/recargar
+    # el censo cada vez que se levanta el stack
+    profiles: ["ingestion"]
+    build:
+      context: ../ingestion
+    container_name: geoyield_ingestion
+    env_file:
+      - ../.env
+    environment:
+      SCHEMA_SQL_PATH: /app/database/schema.sql
+      CSV_SNAPSHOT_PATH: /app/data_raw/opendata_bcn/comercial.csv
+    volumes:
+      - ../database:/app/database
+      - ../data_raw/opendata_bcn:/app/data_raw/opendata_bcn
+    networks:
+      - geoyield_net
+    depends_on:
+      postgis:
+        condition: service_healthy
+
 # son volumenes de docker, no se mapean a directorios del host, lo que permite que docker gestione la persistencia de los datos sin necesidad de preocuparse por la estructura de directorios del host, y también evita problemas de permisos que pueden surgir al mapear volúmenes a directorios del host
 # si se hubiesen mapeado a directorios del host, habría que asegurarse de que esos directorios existen y tienen los permisos adecuados antes de iniciar los contenedores, lo que añade complejidad a la configuración y despliegue
 volumes:
   geoyield_db:
-  geoyield_logs:
+  geoyield_log:
+  geoyield_metrics:
 
 networks:
   geoyield_net:

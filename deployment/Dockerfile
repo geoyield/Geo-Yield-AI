@@ -10,10 +10,12 @@ ARG WORKDIR=/app
 
 WORKDIR ${WORKDIR}
 
-COPY ./ ./
+# el contexto de build es la raiz del repo (ver docker-compose.yml), por lo que copiamos backend/
+# de forma que su paquete "api" quede en /app/api (import string "api.api:app" en main.py)
+COPY backend/ ./
 
 RUN pip install -r ./requirements.txt
 
-CMD ["python", "-m", "main"]
+CMD ["python", "-m", "api.main"]
 
 
