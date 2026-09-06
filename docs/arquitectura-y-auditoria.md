@@ -4,9 +4,16 @@ Este documento resume la arquitectura técnica, las decisiones de diseño y la e
 
 ## 🚀 Resumen Ejecutivo por Fases
 
-Antes de construir nada nuevo, el proyecto pasó por una **Fase 0 de auditoría**: el repositorio de partida mezclaba trabajo real (los notebooks de análisis de datos) con restos de un ejercicio anterior del máster sin relación con el producto (un endpoint que servía un modelo de scikit-learn genérico, plantillas de CRUD de "tareas", dos READMEs con estructuras de proyecto contradictorias). Esa fase se dedicó a separar ambas cosas, corregir la infraestructura base (Docker, CI/CD) y dejar una única base de código coherente sobre la que construir.
+El repositorio se inicalizó con una estructura completa de proyecto de ML con interfaz api, con pipeline de integration y deploy operativas, pendiente de la implementación del modelo y escribir los endopints para consumirlo. Ese modelo debía aprender a dar un score de éxito para un determinado tipo de local de restaruación (restaruante de menú, restaurante para eventos, bar musical, heladería ...) en una ubicación de la ciudad de Barcelona en función de la siguiente infromación en la zona de la calle a que se corresponiese al punto:
 
-A partir de ahí, el proyecto está dividido en tres grandes bloques que trabajan en conjunto:
+* información geolocalizada del portal de open data del ayuntamiento de Barcelona, como la ubicación de los negocios de restauración actuales, por tipo (241021_censcomercialbcn_opendata_2024_v5.csv), la calificación y otra información de tipo urbanístico en el punto, datos de renta a nivel de secciones censales, varias estadísticas de población, como la renta, a nivel secciones censales.
+
+* datos de movilidad de personas del MITMA (Ministerio de Transportes) en base a datos agregados de localización de terminales móviles.
+
+Cuando se procedió a un análisis detallado de los datos, se vio que los datos del MITMA no disponían de la resolución esperada (la resolución es a nivel de distritos), por lo que se optó por calcular el score de forma determinista con una función de indicadores tráfico de personas, renta y competencia elaborados a partir de los datos. 
+Hecho lo anterior se avanza con la parte de consulta de aspectos relativos a normas y procedimientos, basada en RAG de documentos con información relacionada.
+
+El proyecto está dividido en tres grandes bloques que trabajan en conjunto:
 
 *   **Fase 1 (El Cerebro Analítico - Datos Geoespaciales):** Se encarga de entender *dónde* estamos. Recoge datos de movilidad (MITMA), renta (INE) y censo comercial (Ayuntamiento). Limpia estos datos, los cruza y asigna un "Índice de Oportunidad" del 0 al 100 a cada distrito.
 *   **Fase 2 (El Abogado Virtual - Motor RAG Legal):** Procesa los PDFs de normativas urbanísticas (PGM). Divide el texto por artículos, descarta versiones derogadas y convierte el texto vigente en vectores (embeddings locales). Permite buscar la ley exacta aplicable y usar un LLM (Gemini) para redactar una respuesta basada *estrictamente* en ese contexto.

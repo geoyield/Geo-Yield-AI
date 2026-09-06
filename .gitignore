@@ -56,6 +56,8 @@ ENV/
 # --- Misc ---
 README_devops_g5.md
 tmp/
+find_file
+find_text
 
 # Archivos de prueba y mapas locales
 generar_mapa_dependencias.py
@@ -63,6 +65,3 @@ mapa_dependencias_template.html
 mapa_dependencias.html
 prueba_agente.py
 prueba_rag.py
-
-# Local-only runbook; the file itself says it is not meant to be committed.
-RUNBOOK.local.md
