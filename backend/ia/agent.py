@@ -9,7 +9,7 @@ sintetiza en un informe final con un veredicto tipo semáforo.
 import logging
 import re
 from dataclasses import dataclass
-from typing import Any, Callable, Iterator, Literal, TypedDict
+from typing import Any, Callable, Iterator, Literal, NotRequired, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 from sqlalchemy import text
@@ -45,6 +45,7 @@ class ViabilityState(TypedDict):
     """Estado compartido que viaja entre los nodos del grafo de LangGraph."""
     codi_districte: int
     zona_pgm: str
+    pregunta_especifica: NotRequired[str | None]
     datos_distrito: dict[str, Any] | None
     respuesta_legal: dict[str, Any] | None
     informe: dict[str, Any] | None
@@ -80,13 +81,26 @@ No uses formato Markdown de ningún tipo (nada de **negrita**, encabezados con #
 No inventes información que no esté en los dos bloques que recibes. Si falta algún dato, dilo explícitamente en vez de rellenar el hueco."""
 
 
-def _construir_pregunta_legal(zona_pgm: str) -> str:
+def _construir_pregunta_legal(zona_pgm: str, pregunta_especifica: str | None = None) -> str:
     """Construye la pregunta al motor legal usando el nombre amigable de la zona."""
     nombre_zona = ZONA_PGM_NOMBRES.get(zona_pgm, zona_pgm)
-    return (
+    pregunta = (
         f"¿Se permite abrir un bar o restaurante (uso comercial/hostelería) "
         f"en una zona de tipo '{nombre_zona}'? ¿Con qué condiciones o límites?"
     )
+    if pregunta_especifica:
+        # Se refuerza aquí, en la pregunta misma, la misma instrucción que
+        # ya existe en el SYSTEM_PROMPT del RAG ("si el contexto no
+        # contiene información suficiente, dilo explícitamente en vez de
+        # inventar") -- justo donde más importa: una pregunta concreta del
+        # usuario (terrazas, horarios...) es donde más riesgo hay de que
+        # el modelo rellene un hueco con seguridad no verificada.
+        pregunta += (
+            f" Además, el usuario pregunta específicamente sobre: {pregunta_especifica}. "
+            f"Si el contexto no incluye normativa específica sobre esto, dilo explícitamente "
+            f"en vez de responder con seguridad sobre algo que no está en el contexto."
+        )
+    return pregunta
 
 
 def _construir_mensaje_sintesis(
@@ -181,7 +195,7 @@ def _crear_nodos_paralelos(
 
     def normativa_legal(state: ViabilityState) -> dict[str, Any]:
         with Session(session.get_bind()) as node_session:
-            pregunta = _construir_pregunta_legal(state["zona_pgm"])
+            pregunta = _construir_pregunta_legal(state["zona_pgm"], state.get("pregunta_especifica"))
             resultado = generate_answer(
                 node_session,
                 pregunta,
@@ -284,6 +298,7 @@ def generar_informe_viabilidad(
     llm_client: Any = None,
     model: str = DEFAULT_MODEL,
     max_tokens: int = 4096,
+    pregunta_especifica: str | None = None,
 ) -> dict[str, Any]:
     """Punto de entrada para generar el informe de viabilidad de forma síncrona."""
     app = build_agent_graph(
@@ -293,7 +308,9 @@ def generar_informe_viabilidad(
         model=model,
         max_tokens=max_tokens
     )
-    resultado = app.invoke({"codi_districte": codi_districte, "zona_pgm": zona_pgm})
+    resultado = app.invoke(
+        {"codi_districte": codi_districte, "zona_pgm": zona_pgm, "pregunta_especifica": pregunta_especifica}
+    )
     return resultado["informe"]
 
 
@@ -305,19 +322,28 @@ def generar_informe_viabilidad_stream(
     llm_client: Any = None,
     model: str = DEFAULT_MODEL,
     max_tokens: int = 4096,
+    pregunta_especifica: str | None = None,
 ) -> Iterator[dict[str, Any]]:
     """
     Genera el informe de viabilidad emitiendo fragmentos (chunks) progresivamente.
 
     Ideal para integraciones con Server-Sent Events (SSE). Genera eventos tipo
     diccionario listos para ser transmitidos por red.
+
+    pregunta_especifica: si el usuario (p. ej. desde el chat) preguntó
+    algo concreto además de "es viable" (terrazas, horarios...), se
+    incorpora a la consulta legal -- si no hay normativa específica
+    cargada sobre ello, el propio RAG debe decirlo explícitamente, nunca
+    inventarlo.
     """
     from backend.rag.gemini_adapter import GeminiAsAnthropicAdapter
 
     grafo = build_data_gathering_graph(
         session, embed_fn=embed_fn, llm_client=llm_client, model=model
     )
-    resultado = grafo.invoke({"codi_districte": codi_districte, "zona_pgm": zona_pgm})
+    resultado = grafo.invoke(
+        {"codi_districte": codi_districte, "zona_pgm": zona_pgm, "pregunta_especifica": pregunta_especifica}
+    )
 
     datos = resultado.get("datos_distrito")
     legal = resultado["respuesta_legal"]

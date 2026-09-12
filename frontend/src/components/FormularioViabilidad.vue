@@ -3,7 +3,17 @@ import { onMounted, ref, watch } from 'vue'
 import { geocodificarDireccion, obtenerDistritos, obtenerZonasPgm } from '../services/api.js'
 
 const emit = defineEmits(['generar'])
-defineProps({ cargando: { type: Boolean, default: false } })
+const props = defineProps({
+  cargando: { type: Boolean, default: false },
+  // Precarga desde el chat: cuando la extracción de intención resuelve
+  // distrito/zona/ubicación (total o parcialmente), se reflejan aquí --
+  // el usuario sigue pudiendo corregirlos, igual que con la búsqueda por
+  // dirección de este mismo formulario.
+  distritoInicial: { type: Number, default: null },
+  zonaInicial: { type: String, default: null },
+  ubicacionInicial: { type: Object, default: null },
+  mensajeInicial: { type: Object, default: null },
+})
 
 const distritos = ref([])
 const zonas = ref([])
@@ -31,6 +41,36 @@ watch(codiDistricte, (nuevo) => {
     distritoDeLaUbicacion.value = null
   }
 })
+
+// Precarga desde el chat -- mismo tratamiento que si el usuario hubiera
+// usado el campo de búsqueda de este formulario.
+watch(
+  () => props.distritoInicial,
+  (nuevo) => {
+    if (nuevo) {
+      codiDistricte.value = nuevo
+      distritoDeLaUbicacion.value = nuevo
+    }
+  },
+)
+watch(
+  () => props.zonaInicial,
+  (nuevo) => {
+    if (nuevo) zonaPgm.value = nuevo
+  },
+)
+watch(
+  () => props.ubicacionInicial,
+  (nuevo) => {
+    if (nuevo) ubicacionGeocodificada.value = nuevo
+  },
+)
+watch(
+  () => props.mensajeInicial,
+  (nuevo) => {
+    if (nuevo) mensajeDireccion.value = nuevo
+  },
+)
 
 onMounted(async () => {
   try {
