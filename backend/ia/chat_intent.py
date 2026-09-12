@@ -55,7 +55,7 @@ def extraer_intencion(mensaje: str, llm_client=None, model: str | None = None) -
     try:
         response = client.messages.create(
             model=modelo,
-            max_tokens=256,
+            max_tokens=2048,
             system=EXTRACCION_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": mensaje}],
         )
