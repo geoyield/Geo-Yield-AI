@@ -6,7 +6,6 @@ Combina en un grafo de LangGraph dos fuentes de información en paralelo
 sintetiza en un informe final con un veredicto tipo semáforo.
 """
 
-import logging
 import re
 from dataclasses import dataclass
 from typing import Any, Callable, Iterator, Literal, TypedDict
@@ -18,7 +17,9 @@ from sqlalchemy.orm import Session
 from backend.rag.embeddings import EmbeddingFunction, embed_texts
 from backend.rag.query_engine import DEFAULT_MODEL, generate_answer
 
-logger = logging.getLogger("geoyield_agent")
+from backend.observability import get_logger
+
+logger = get_logger("ia.agent")
 
 Semaforo = Literal["verde", "ambar", "rojo"]
 

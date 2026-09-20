@@ -35,6 +35,17 @@ google-genai==2.18.1
 # se fija la versión anterior en su lugar.
 pandas==3.0.2
 
+# --- Observability: direct CloudWatch shipping (OPTIONAL) ---
+# Only needed with LOG_CLOUDWATCH_ENABLED=true, i.e. when the host does NOT
+# collect stdout (the Render case). On ECS/Fargate/App Runner the host driver
+# already ships stdout and these two are unnecessary.
+#
+# The import is lazy (backend/observability/cloudwatch.py), so the app starts
+# fine without them while the flag stays false. Left commented out so boto3
+# (~15 MB with transitives) is not imposed on anyone who does not need it.
+# boto3==1.41.20
+# watchtower==3.5.0
+
 # --- Testing ---
 pytest==8.3.5
 pytest-cov==4.1.0

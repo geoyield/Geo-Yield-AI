@@ -23,6 +23,9 @@ from sqlalchemy.orm import Session
 
 from backend.api.deps import get_session
 from backend.api.schemas.competidores import CentroOut, CompetidorOut, CompetidoresResponse
+from backend.observability import get_logger, log_event
+
+logger = get_logger("api.competidores")
 
 router = APIRouter(prefix="/api", tags=["competidores"])
 
@@ -56,6 +59,12 @@ def _buscar_por_distrito(db: Session, codi_districte: int, limit: int) -> Compet
     ).mappings().first()
 
     if centro_row is None or centro_row["total"] == 0:
+        # A district with no competitors loaded is a data gap, not a normal
+        # result: the map silently renders empty for the user.
+        log_event(
+            logger, "WARNING", "No competitors found for district",
+            event="competidores.vacio", codi_districte=codi_districte,
+        )
         return CompetidoresResponse(centro=None, total=0, competidores=[], modo="distrito")
 
     filas = db.execute(

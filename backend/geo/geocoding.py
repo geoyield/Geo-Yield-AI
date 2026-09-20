@@ -14,12 +14,13 @@ Funciones principales:
 - resolver_distrito_desde_suburb: la lógica de emparejamiento en sí, separada para poder probarla sin red.
 """
 
-import logging
 import re
 
 import requests
 
-logger = logging.getLogger("geoyield_geocoding")
+from backend.observability import get_logger
+
+logger = get_logger("geo.geocoding")
 
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 

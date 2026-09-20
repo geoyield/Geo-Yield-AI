@@ -1,4 +1,5 @@
 import logging
+import os
 import time
 
 from fastapi import FastAPI
@@ -6,14 +7,24 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
 from sqlalchemy import text
 
+from backend.observability import (
+    configure_logging,
+    get_logger,
+    log_event,
+    new_trace_id,
+    reset_trace_id,
+    set_trace_id,
+)
+
 from . import deps
 from .metrics.metrics import metrics
-from .routers import articulos, competidores, geocodificacion, informes
+from .routers import articulos, competidores, geocodificacion, informes, logs
 
-# El logging global se configura en main.py (punto de entrada). Aquí solo se
-# obtiene el logger ya configurado, para mantener un único punto de control
-# del nivel de log (variable de entorno LOG_LEVEL).
-logger = logging.getLogger("geoyield_api")
+# Also configured here, not only in main.py, so `uvicorn backend.api.api:app`
+# is covered. Idempotent.
+configure_logging()
+
+logger = get_logger("api")
 
 app = FastAPI(
     title="Geo-Yield-AI API",
@@ -21,21 +32,33 @@ app = FastAPI(
     lifespan=deps.lifespan,
 )
 
-# CORS para el servidor de desarrollo de Vite (puertos por defecto). En
-# producción, restringir a los dominios reales del frontend desplegado,
-# no dejar esta lista de orígenes permisivos.
+# Was hardcoded to the Vite localhost ports, which made it impossible for a
+# deployed frontend to call the API or ship its logs.
+_DEFAULT_ORIGINS = "http://localhost:5173,http://localhost:5174,http://127.0.0.1:5173"
+CORS_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("CORS_ORIGINS", _DEFAULT_ORIGINS).split(",")
+    if origin.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:5174", "http://127.0.0.1:5173"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Without this the browser cannot read the trace id back.
+    expose_headers=["X-Request-ID"],
 )
 
 app.include_router(informes.router)
 app.include_router(competidores.router)
 app.include_router(articulos.router)
 app.include_router(geocodificacion.router)
+app.include_router(logs.router)
+
+# Probes are called every few seconds; logging them is paid-for noise.
+UNLOGGED_PATHS = frozenset({"/health", "/ready", "/metrics"})
 
 
 @app.get("/health")
@@ -67,8 +90,8 @@ def ready():
         with deps.db_engine.connect() as conn:
             conn.execute(text("SELECT 1"))
         return {"status": "ready"}
-    except Exception as exc:
-        logger.error(f"Readiness check falló: {exc}")
+    except Exception:
+        logger.exception("Readiness check failed")
         return PlainTextResponse("database unreachable", status_code=503)
 
 
@@ -79,10 +102,60 @@ def metrics_endpoint():
 
 @app.middleware("http")
 async def track_request_count(request, call_next):
-    """Middleware mínimo de observabilidad: cuenta peticiones y su duración."""
-    start = time.time()
+    """
+    Pins the trace id and logs method, path, status and duration.
+
+    Was a logger.debug(), which never emitted at the default LOG_LEVEL=20 --
+    so in practice there was no request log at all. The trace id comes from
+    the frontend's X-Request-ID header, or is generated, and is pinned in a
+    ContextVar so every log line raised during this request carries it.
+    """
+    trace_id = request.headers.get("X-Request-ID") or new_trace_id()
+    # Client-controlled and ends up in every log line, so constrain it.
+    trace_id = "".join(c for c in trace_id if c.isalnum() or c in "-_")[:64] or new_trace_id()
+    token = set_trace_id(trace_id)
+
+    start = time.perf_counter()
     metrics["total_requests"] += 1
-    response = await call_next(request)
-    duration = time.time() - start
-    logger.debug(f"{request.method} {request.url.path} - {duration:.3f}s")
+
+    try:
+        response = await call_next(request)
+    except Exception:
+        duration_ms = (time.perf_counter() - start) * 1000
+        # One record, not two: exc_info lets the formatter build the `error`
+        # object, so a separate logger.exception() would double the ingestion.
+        logger.error(
+            f"{request.method} {request.url.path} - unhandled exception",
+            exc_info=True,
+            extra={
+                "duration_ms": round(duration_ms, 2),
+                "context": {"method": request.method, "path": request.url.path},
+            },
+        )
+        reset_trace_id(token)
+        raise
+
+    duration_ms = (time.perf_counter() - start) * 1000
+    response.headers["X-Request-ID"] = trace_id
+
+    if request.url.path not in UNLOGGED_PATHS:
+        # Keeps `filter level = "ERROR"` meaningful in Logs Insights.
+        if response.status_code >= 500:
+            level = logging.ERROR
+        elif response.status_code >= 400:
+            level = logging.WARNING
+        else:
+            level = logging.INFO
+
+        log_event(
+            logger,
+            level,
+            f"{request.method} {request.url.path} {response.status_code}",
+            duration_ms=duration_ms,
+            method=request.method,
+            path=request.url.path,
+            status_code=response.status_code,
+        )
+
+    reset_trace_id(token)
     return response

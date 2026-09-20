@@ -11,12 +11,13 @@ automáticamente al no aparecer en la tabla, en vez de mantener aparte
 una lista de "qué excluir".
 """
 
-import logging
 import time
 
 import requests
 
-logger = logging.getLogger("geoyield_geocoding")
+from backend.observability import get_logger
+
+logger = get_logger("geo.amb_identify")
 
 AMB_IDENTIFY_URL = "https://geoportal.amb.cat/geoserveis/rest/services/pla_general_metropolita_1976/MapServer/identify"
 

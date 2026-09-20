@@ -1,6 +1,9 @@
 <script setup>
 import { ref, watch, onMounted, onUnmounted } from 'vue'
 import { obtenerArticulo } from '../services/api.js'
+import { createLogger } from '../services/logger.js'
+
+const log = createLogger('component.visor-normativa')
 
 const props = defineProps({
   articulo: { type: Object, default: null },
@@ -31,7 +34,19 @@ watch(
 
     try {
       detalle.value = await obtenerArticulo(nuevo.fuente_legal, nuevo.numero_articulo)
+      log.event('articulo.abierto', {
+        fuente_legal: nuevo.fuente_legal,
+        numero_articulo: nuevo.numero_articulo,
+      })
     } catch (err) {
+      // A cited article that cannot be opened points to a hallucinated
+      // citation or a stale legal corpus, so it is worth recording.
+      log.error('Could not load the legal article', {
+        error: err,
+        fuente_legal: nuevo.fuente_legal,
+        numero_articulo: nuevo.numero_articulo,
+        status: err?.status,
+      })
       error.value = err.message
     } finally {
       cargando.value = false

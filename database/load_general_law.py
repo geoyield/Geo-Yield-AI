@@ -18,7 +18,6 @@ Uso:
     python -m database.load_general_law data/raw/legal/horarios.pdf "Ordre INT/358/2011"
 """
 
-import logging
 import sys
 from pathlib import Path
 
@@ -33,8 +32,9 @@ from backend.rag.chunking_general import parse_articulo_general
 from backend.rag.embeddings import EmbeddingFunction, embed_texts
 from backend.rag.pdf_extraction import extract_text_from_pdf
 
-logger = logging.getLogger("geoyield_rag")
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+from backend.observability import configure_logging, get_logger
+
+logger = get_logger("etl.general_law")
 
 
 def load_general_law(
@@ -97,6 +97,7 @@ def run(pdf_path: Path, fuente_legal: str, engine=None, embed_fn: EmbeddingFunct
 
 
 if __name__ == "__main__":
+    configure_logging()
     if len(sys.argv) != 3:
         print('Uso: python -m database.load_general_law <ruta.pdf> "<nombre de la norma>"')
         sys.exit(1)

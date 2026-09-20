@@ -6,6 +6,9 @@ import BurbujaChat from './components/BurbujaChat.vue'
 import MapaDistrito from './components/MapaDistrito.vue'
 import VisorNormativa from './components/VisorNormativa.vue'
 import { generarInformeStream } from './services/api.js'
+import { createLogger } from './services/logger.js'
+
+const log = createLogger('app.informe')
 
 const SEMAFOROS_VALIDOS = ['verde', 'ambar', 'rojo']
 
@@ -50,6 +53,7 @@ const resumen = computed(() => {
 const tieneResultados = computed(() => datosDistrito.value || respuestaLegal.value)
 
 async function onGenerar({ codiDistricte, zonaPgm, ubicacion }) {
+  const inicio = performance.now()
   cargando.value = true
   error.value = null
   codiDistrictePedido.value = codiDistricte
@@ -80,6 +84,14 @@ async function onGenerar({ codiDistricte, zonaPgm, ubicacion }) {
       semaforoConfirmado.value = evento.semaforo
       resumenConfirmado.value = evento.resumen
       cargando.value = false
+
+      log.event('informe.completado', {
+        codi_districte: codiDistricte,
+        zona_pgm: zonaPgm,
+        semaforo: evento.semaforo,
+        duration_ms: performance.now() - inicio,
+        articulos_citados: articulosCitados.value.length,
+      })
     },
   })
 }

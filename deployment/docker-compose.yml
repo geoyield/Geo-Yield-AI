@@ -36,8 +36,12 @@ services:
     # ETL desde fuera de Docker durante el desarrollo (ver README, Fase 1).
     # Trade-off consciente para un entorno de desarrollo local: en un
     # despliegue real, esto no debería publicarse al host.
+    # Honours POSTGRES_HOST_PORT from the root .env, so a Postgres already
+    # running on the host does not block startup. Interpolation reads the
+    # .env of the compose file's directory, so run compose with
+    # `--env-file .env` from the repo root (see README).
     ports:
-      - "5432:5432"
+      - "${POSTGRES_HOST_PORT:-5432}:5432"
     volumes:
       # A partir de Postgres/PostGIS 18, las imágenes oficiales esperan el
       # volumen montado en /var/lib/postgresql (el directorio PADRE), no en
@@ -80,8 +84,10 @@ services:
       - ../.env
     ports:
       - "8080:8000"
-    volumes:
-      - geoyield_logs:/app/backend/api/logs
+    # No log volume any more: logs go to stdout as JSON (one line per event),
+    # which is what both `docker compose logs` and the ECS awslogs/FireLens
+    # drivers collect. A file inside the container reaches no collector.
+    #   docker compose logs -f api | jq .
     networks:
       - geoyield_net
     depends_on:
@@ -92,7 +98,6 @@ services:
 # evitar problemas de permisos y dejar la persistencia en manos de Docker.
 volumes:
   geoyield_db:
-  geoyield_logs:
 
 networks:
   geoyield_net:

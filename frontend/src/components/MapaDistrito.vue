@@ -11,6 +11,9 @@ import 'vue-leaflet-markercluster/dist/style.css'
 import { LMap, LTileLayer, LMarker, LPopup } from '@vue-leaflet/vue-leaflet'
 import { LMarkerClusterGroup } from 'vue-leaflet-markercluster'
 import { obtenerCompetidores } from '../services/api.js'
+import { createLogger } from '../services/logger.js'
+
+const log = createLogger('component.mapa')
 
 const props = defineProps({
   codiDistricte: { type: Number, required: true },
@@ -47,7 +50,19 @@ async function cargarCompetidores() {
     // Un radio de unos cientos de metros se ve mejor con más zoom que
     // la vista de distrito completo.
     zoom.value = datos.modo === 'radio' ? 16 : 14
+
+    log.event('competidores.consultados', {
+      codi_districte: props.codiDistricte,
+      modo: datos.modo,
+      total: datos.total,
+      radio_metros: datos.radio_metros,
+    })
   } catch (err) {
+    log.error('Could not load competitors', {
+      error: err,
+      codi_districte: props.codiDistricte,
+      by_radius: props.ubicacion !== null,
+    })
     error.value = 'No se pudieron cargar los competidores del distrito.'
   } finally {
     cargando.value = false
