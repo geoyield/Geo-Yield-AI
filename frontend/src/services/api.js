@@ -1,8 +1,12 @@
+import { createLogger, generateTraceId } from './logger'
+
 /**
  * URL base de la API. Se obtiene de las variables de entorno de Vite.
  * @constant {string}
  */
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+
+const log = createLogger('api')
 
 /**
  * Procesa la respuesta de Fetch, parseando el JSON o lanzando un error detallado.
@@ -11,37 +15,78 @@ async function handleResponse(response) {
   if (!response.ok) {
     const body = await response.json().catch(() => null)
     const mensaje = body?.detail || `Error HTTP ${response.status}: Error al conectar con el servidor.`
-    throw new Error(mensaje)
+    const error = new Error(mensaje)
+    error.status = response.status
+    throw error
   }
   return response.json()
+}
+
+/**
+ * fetch wrapper that adds correlation, timing and error logging.
+ *
+ * The trace id travels in `X-Request-ID` and the backend propagates it to
+ * every log line of that request, so a failed call can be followed through
+ * to the RAG, agent and database lines it produced.
+ *
+ * @param {string} operation
+ * @param {string} url
+ * @param {RequestInit} [options]
+ * @returns {Promise<any>}
+ */
+async function request(operation, url, options = {}) {
+  const traceId = generateTraceId()
+  const start = performance.now()
+
+  try {
+    const response = await fetch(url, {
+      ...options,
+      headers: { ...(options.headers || {}), 'X-Request-ID': traceId },
+    })
+    const data = await handleResponse(response)
+
+    log.debug(`${operation} ok`, {
+      trace_id: traceId,
+      duration_ms: performance.now() - start,
+      operation,
+      status: response.status,
+    })
+    return data
+  } catch (error) {
+    log.error(`${operation} failed`, {
+      error,
+      trace_id: traceId,
+      duration_ms: performance.now() - start,
+      operation,
+      status: error.status,
+    })
+    throw error
+  }
 }
 
 /**
  * Obtiene la lista de distritos disponibles.
  */
 export async function obtenerDistritos() {
-  const response = await fetch(`${API_BASE_URL}/api/distritos`)
-  return handleResponse(response)
+  return request('obtenerDistritos', `${API_BASE_URL}/api/distritos`)
 }
 
 /**
  * Obtiene las zonas urbanísticas PGM.
  */
 export async function obtenerZonasPgm() {
-  const response = await fetch(`${API_BASE_URL}/api/zonas-pgm`)
-  return handleResponse(response)
+  return request('obtenerZonasPgm', `${API_BASE_URL}/api/zonas-pgm`)
 }
 
 /**
  * Genera un informe de forma síncrona (completo de una vez).
  */
 export async function generarInforme(codiDistricte, zonaPgm) {
-  const response = await fetch(`${API_BASE_URL}/api/informes`, {
+  return request('generarInforme', `${API_BASE_URL}/api/informes`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ codi_districte: codiDistricte, zona_pgm: zonaPgm }),
   })
-  return handleResponse(response)
 }
 
 /**
@@ -49,8 +94,7 @@ export async function generarInforme(codiDistricte, zonaPgm) {
  */
 export async function obtenerArticulo(fuenteLegal, numeroArticulo) {
   const params = new URLSearchParams({ fuente_legal: fuenteLegal, numero_articulo: numeroArticulo })
-  const response = await fetch(`${API_BASE_URL}/api/articulos?${params}`)
-  return handleResponse(response)
+  return request('obtenerArticulo', `${API_BASE_URL}/api/articulos?${params}`)
 }
 
 /**
@@ -58,11 +102,13 @@ export async function obtenerArticulo(fuenteLegal, numeroArticulo) {
  * PGM sugeridos, cuando se pueden determinar. Lanza un error (que
  * handleResponse convierte en Error con el detail del backend) si la
  * dirección no se encuentra dentro de Barcelona.
+ *
+ * PRIVACY: the address typed by the user is personal data and is never
+ * logged -- only the outcome (whether it matched, and which district/zone).
  */
 export async function geocodificarDireccion(direccion) {
   const params = new URLSearchParams({ direccion })
-  const response = await fetch(`${API_BASE_URL}/api/geocodificar?${params}`)
-  return handleResponse(response)
+  return request('geocodificarDireccion', `${API_BASE_URL}/api/geocodificar?${params}`)
 }
 
 /**
@@ -76,8 +122,7 @@ export async function obtenerCompetidores(codiDistricte, ubicacion = null) {
     params.set('lat', ubicacion.lat)
     params.set('lon', ubicacion.lon)
   }
-  const response = await fetch(`${API_BASE_URL}/api/competidores?${params}`)
-  return handleResponse(response)
+  return request('obtenerCompetidores', `${API_BASE_URL}/api/competidores?${params}`)
 }
 
 /**
@@ -91,10 +136,18 @@ export async function obtenerCompetidores(codiDistricte, ubicacion = null) {
 export async function generarInformeStream(codiDistricte, zonaPgm, callbacks = {}) {
   const { onDatos, onToken, onDone, onError } = callbacks
 
+  const traceId = generateTraceId()
+  const start = performance.now()
+  const streamLog = log.child({
+    trace_id: traceId,
+    codi_districte: codiDistricte,
+    zona_pgm: zonaPgm,
+  })
+
   try {
     const response = await fetch(`${API_BASE_URL}/api/informes/stream`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-Request-ID': traceId },
       body: JSON.stringify({ codi_districte: codiDistricte, zona_pgm: zonaPgm }),
     })
 
@@ -106,6 +159,7 @@ export async function generarInformeStream(codiDistricte, zonaPgm, callbacks = {
     const reader = response.body.getReader()
     const decoder = new TextDecoder()
     let buffer = ''
+    let corruptBlocks = 0
 
     while (true) {
       const { done, value } = await reader.read()
@@ -125,13 +179,31 @@ export async function generarInformeStream(codiDistricte, zonaPgm, callbacks = {
           if (evento.type === 'datos') onDatos?.(evento)
           else if (evento.type === 'token') onToken?.(evento.text)
           else if (evento.type === 'done') onDone?.(evento)
-          else if (evento.type === 'error') onError?.(evento.detail)
-        } catch (e) {
-          console.warn('Error parseando bloque SSE:', bloque)
+          else if (evento.type === 'error') {
+            streamLog.error('Backend reported an error during streaming', {
+              detail: evento.detail,
+            })
+            onError?.(evento.detail)
+          }
+        } catch (error) {
+          corruptBlocks += 1
+          streamLog.warn('Malformed SSE block, ignored', {
+            error,
+            fragment: String(bloque).slice(0, 200),
+          })
         }
       }
     }
+
+    streamLog.event('informe.generado', {
+      duration_ms: performance.now() - start,
+      corrupt_blocks: corruptBlocks,
+    })
   } catch (error) {
+    streamLog.error('Report streaming failed', {
+      error,
+      duration_ms: performance.now() - start,
+    })
     onError?.(error.message)
   }
 }

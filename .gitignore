@@ -16,6 +16,12 @@ data/
 *.csv
 *.tsv
 *.json
+# ...but *.json above is meant for raw data only. Without these exceptions it
+# also swallows the frontend manifests, which is why frontend/package.json was
+# never committed and the app could not be installed from a clean clone.
+!frontend/package.json
+!frontend/package-lock.json
+!**/.vscode/*.json
 *.xlsx
 *.parquet
 *.zip
@@ -57,3 +63,6 @@ mapa_dependencias_template.html
 mapa_dependencias.html
 prueba_agente.py
 prueba_rag.py
+
+# Local-only runbook; the file itself says it is not meant to be committed.
+RUNBOOK.local.md

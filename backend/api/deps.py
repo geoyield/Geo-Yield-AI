@@ -9,7 +9,6 @@ sin crear un import circular con api.py -- si el router importara
 para registrarlo, cada uno esperaría al otro al cargar.
 """
 
-import logging
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
@@ -19,6 +18,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker
 
 from backend.db.connection import resolve_database_url
+from backend.observability import get_logger, shutdown_logging, tame_third_party_loggers
 
 # Se carga aquí, a nivel de módulo, para cubrir el caso de correr uvicorn
 # directamente en la máquina (sin pasar por Docker, donde env_file en
@@ -27,7 +27,7 @@ from backend.db.connection import resolve_database_url
 # no interfiere con el caso de Docker.
 load_dotenv()
 
-logger = logging.getLogger("geoyield_api")
+logger = get_logger("api.deps")
 
 # Estado de aplicación gestionado por el lifespan. Se evita usar variables
 # globales mutables fuera de este patrón para no acoplar el estado a nivel
@@ -47,6 +47,10 @@ async def lifespan(app: FastAPI):
     inconsistente.
     """
     global db_engine, SessionLocal
+
+    # Re-applied here because a CLI start installs uvicorn's own logging
+    # config after this module is imported; the lifespan runs after that.
+    tame_third_party_loggers()
 
     try:
         database_url = resolve_database_url()
@@ -77,6 +81,9 @@ async def lifespan(app: FastAPI):
     if db_engine is not None:
         db_engine.dispose()
         logger.info("Conexiones a la base de datos cerradas.")
+
+    # Drains the pending CloudWatch queue before the process exits.
+    shutdown_logging()
 
 
 def get_session():

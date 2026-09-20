@@ -1,6 +1,9 @@
 <script setup>
 import { onMounted, ref, watch } from 'vue'
 import { geocodificarDireccion, obtenerDistritos, obtenerZonasPgm } from '../services/api.js'
+import { createLogger } from '../services/logger.js'
+
+const log = createLogger('component.formulario')
 
 const emit = defineEmits(['generar'])
 defineProps({ cargando: { type: Boolean, default: false } })
@@ -38,6 +41,7 @@ onMounted(async () => {
     distritos.value = listaDistritos
     zonas.value = listaZonas
   } catch (err) {
+    log.error('Could not load districts and zones', { error: err })
     errorCarga.value = 'No se pudieron cargar los distritos y zonas. Comprueba que la API esté arrancada.'
   }
 })
@@ -60,6 +64,13 @@ async function buscarDireccion() {
     }
     if (resultado.zona_pgm) zonaPgm.value = resultado.zona_pgm
 
+    // GDPR: log the outcome, never the address the user typed.
+    log.event('direccion.geocodificada', {
+      matched: true,
+      codi_districte: resultado.codi_districte ?? null,
+      zone_detected: Boolean(resultado.zona_pgm),
+    })
+
     if (resultado.codi_districte && resultado.zona_pgm) {
       mensajeDireccion.value = {
         tipo: 'exito',
@@ -77,6 +88,13 @@ async function buscarDireccion() {
       }
     }
   } catch (err) {
+    // A 404 is expected here (address outside Barcelona), so it is logged as
+    // a warning to keep real errors easy to find.
+    const notFound = err?.status === 404
+    log[notFound ? 'warn' : 'error']('Geocoding returned no result', {
+      error: err,
+      status: err?.status,
+    })
     mensajeDireccion.value = {
       tipo: 'error',
       texto: 'No se encontró esa dirección dentro de Barcelona. Puedes seleccionar distrito y zona manualmente.',
@@ -88,6 +106,11 @@ async function buscarDireccion() {
 
 function onSubmit() {
   if (codiDistricte.value && zonaPgm.value) {
+    log.event('informe.solicitado', {
+      codi_districte: codiDistricte.value,
+      zona_pgm: zonaPgm.value,
+      from_address: ubicacionGeocodificada.value !== null,
+    })
     emit('generar', {
       codiDistricte: codiDistricte.value,
       zonaPgm: zonaPgm.value,

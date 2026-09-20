@@ -14,6 +14,9 @@ from sqlalchemy.orm import Session
 
 from backend.api.deps import get_session
 from backend.api.schemas.articulos import ArticuloOut
+from backend.observability import get_logger, log_event
+
+logger = get_logger("api.articulos")
 
 router = APIRouter(prefix="/api", tags=["articulos"])
 
@@ -70,6 +73,13 @@ def obtener_articulo(
     ).mappings().first()
 
     if row is None:
+        # An article cited by a report that cannot then be retrieved points to
+        # a hallucinated citation or a stale legal corpus, so it is worth a
+        # signal rather than a silent 404.
+        log_event(
+            logger, "WARNING", "Cited legal article not found",
+            event="articulo.no_encontrado", fuente_legal=fuente, numero_articulo=numero,
+        )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No se encontró ese artículo.",

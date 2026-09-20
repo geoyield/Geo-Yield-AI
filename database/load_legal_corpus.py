@@ -4,7 +4,6 @@ reinicio de sandbox, actualizado a la migración 0005 (upsert por
 (fuente_legal, numero_articulo) en vez de solo numero_articulo).
 """
 
-import logging
 import sys
 from pathlib import Path
 
@@ -19,8 +18,9 @@ from backend.rag.chunking import ARTICLE_TO_ZONA_PGM, parse_legal_chunks, select
 from backend.rag.embeddings import EmbeddingFunction, embed_texts
 from backend.rag.pdf_extraction import extract_text_from_pdf
 
-logger = logging.getLogger("geoyield_rag")
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+from backend.observability import configure_logging, get_logger
+
+logger = get_logger("etl.legal_corpus")
 
 PGM_FUENTE_LEGAL = "PGM (Secció V)"
 
@@ -91,6 +91,7 @@ def run(pdf_dir: Path, engine=None, embed_fn: EmbeddingFunction = embed_texts) -
 
 
 if __name__ == "__main__":
+    configure_logging()
     if len(sys.argv) != 2:
         print("Uso: python -m database.load_legal_corpus <directorio con los PDF>")
         sys.exit(1)

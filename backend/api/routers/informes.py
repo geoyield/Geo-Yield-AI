@@ -18,7 +18,6 @@ Diseño:
 """
 
 import json
-import logging
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -27,6 +26,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from backend.api.deps import get_session
+from backend.observability import get_logger
 from backend.api.schemas.informes import DistritoOut, InformeRequest, InformeResponse, ZonaPgmOut
 from backend.ia.agent import (
     ZONA_PGM_NOMBRES,
@@ -35,7 +35,7 @@ from backend.ia.agent import (
     zonas_pgm_disponibles,
 )
 
-logger = logging.getLogger("geoyield_api")
+logger = get_logger("api.informes")
 
 router = APIRouter(prefix="/api", tags=["informes"])
 
@@ -78,8 +78,14 @@ def crear_informe(payload: InformeRequest, db: Session = Depends(get_session)):
             db, codi_districte=payload.codi_districte, zona_pgm=payload.zona_pgm
         )
     except Exception:
+        # District and zone go in `context`, not interpolated into the
+        # message, so Logs Insights can filter on them directly.
         logger.exception(
-            f"Error generando el informe (distrito={payload.codi_districte}, zona={payload.zona_pgm})"
+            "Report generation failed",
+            extra={"context": {
+                "codi_districte": payload.codi_districte,
+                "zona_pgm": payload.zona_pgm,
+            }},
         )
         raise HTTPException(
             status_code=502,
@@ -98,7 +104,11 @@ def crear_informe_stream(payload: InformeRequest, db: Session = Depends(get_sess
                 yield f"data: {json.dumps(evento, ensure_ascii=False, default=_json_default)}\n\n"
         except Exception:
             logger.exception(
-                f"Error en el streaming del informe (distrito={payload.codi_districte}, zona={payload.zona_pgm})"
+                "Report streaming failed",
+                extra={"context": {
+                    "codi_districte": payload.codi_districte,
+                    "zona_pgm": payload.zona_pgm,
+                }},
             )
             error = {"type": "error", "detail": "No se pudo generar el informe. Inténtalo de nuevo en unos segundos."}
             yield f"data: {json.dumps(error, ensure_ascii=False)}\n\n"

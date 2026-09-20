@@ -7,11 +7,12 @@ anthropic.Anthropic() (`.messages.create(...)` -> objeto con
 `.content[0].text`) por compatibilidad con el resto del pipeline.
 """
 
-import logging
 import os
 import time
 
-logger = logging.getLogger("geoyield_rag")
+from backend.observability import get_logger
+
+logger = get_logger("rag.gemini_adapter")
 
 # Errores 5xx de Gemini (p. ej. 503 UNAVAILABLE por alta demanda) suelen ser
 # picos transitorios, no un fallo real de la petición -- vale la pena

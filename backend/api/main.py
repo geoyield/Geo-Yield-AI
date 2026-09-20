@@ -1,6 +1,4 @@
-import logging
 import os
-from pathlib import Path
 
 import uvicorn
 from dotenv import load_dotenv
@@ -10,25 +8,12 @@ from dotenv import load_dotenv
 # módulos que se importen después de este punto (incluido api.py).
 load_dotenv()
 
-# Directorios del proyecto
-PROJECT_ROOT = Path(__file__).resolve().parent
-LOG_DIR = PROJECT_ROOT / "logs"
-LOG_DIR.mkdir(exist_ok=True)
+# Logging config now lives in backend/observability and is also invoked from
+# api.py, so a `uvicorn backend.api.api:app` start (which never imports this
+# module) still gets JSON output and honours LOG_LEVEL.
+from backend.observability import configure_logging  # noqa: E402
 
-# Configuración del logging a nivel de aplicación. Para obtener el logger en
-# cada módulo se debe llamar a logging.getLogger("geoyield_api"), lo que
-# permite un control centralizado del nivel de log a través de la variable
-# de entorno LOG_LEVEL, sin tocar código.
-log_level = int(os.getenv("LOG_LEVEL", "20"))  # 20 = INFO por defecto
-logging.basicConfig(
-    level=log_level,
-    format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
-    handlers=[
-        logging.FileHandler(str(LOG_DIR / "geoyield_api.log")),
-        logging.StreamHandler(),
-    ],
-)
-logger = logging.getLogger("geoyield_api")
+configure_logging()
 
 if __name__ == "__main__":
     # El autoreload solo tiene sentido en desarrollo local; en producción
@@ -40,6 +25,7 @@ if __name__ == "__main__":
         "backend.api.api:app",
         host="0.0.0.0",
         port=8000,
-        log_level=log_level,
+        # Stops uvicorn installing its own plain-text logging config over ours.
+        log_config=None,
         reload=is_dev,
     )
