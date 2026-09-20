@@ -247,6 +247,6 @@ def request(content: str, thread: str) -> str:
 if __name__ == '__main__':
     print("para persistir la conversación me deberías dar tu usuario\nusuario:")
     print("quieres seguir alguna de estas conversacines o iniciar una nueva?")
-    
-    request(sys.argv[1], sys.argv[2]).text)
+
+    request(sys.argv[1], sys.argv[2]).text
     
