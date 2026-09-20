@@ -5,7 +5,7 @@ import TarjetaVeredicto from './components/TarjetaVeredicto.vue'
 import BurbujaChat from './components/BurbujaChat.vue'
 import MapaDistrito from './components/MapaDistrito.vue'
 import VisorNormativa from './components/VisorNormativa.vue'
-import { generarInformeStream } from './services/api.js'
+import { chatInformeStream, generarInformeStream } from './services/api.js'
 
 const SEMAFOROS_VALIDOS = ['verde', 'ambar', 'rojo']
 
@@ -49,18 +49,21 @@ const resumen = computed(() => {
 
 const tieneResultados = computed(() => datosDistrito.value || respuestaLegal.value)
 
-async function onGenerar({ codiDistricte, zonaPgm, ubicacion }) {
-  cargando.value = true
+function reiniciarResultados() {
   error.value = null
-  codiDistrictePedido.value = codiDistricte
-  ubicacionPedida.value = ubicacion
-
   datosDistrito.value = null
   respuestaLegal.value = ''
   articulosCitados.value = []
   textoSintesis.value = ''
   semaforoConfirmado.value = null
   resumenConfirmado.value = null
+}
+
+async function onGenerar({ codiDistricte, zonaPgm, ubicacion }) {
+  cargando.value = true
+  codiDistrictePedido.value = codiDistricte
+  ubicacionPedida.value = ubicacion
+  reiniciarResultados()
 
   await generarInformeStream(codiDistricte, zonaPgm, {
     onDatos: (evento) => {
@@ -83,6 +86,73 @@ async function onGenerar({ codiDistricte, zonaPgm, ubicacion }) {
     },
   })
 }
+
+// --- Chat conversacional ---
+// No es un agente: extrae dirección + pregunta específica de la frase
+// libre, y en cuanto resuelve distrito+zona, reutiliza exactamente el
+// mismo pipeline de streaming que el formulario manual. Si no puede
+// resolver todo, entrega lo que sí pudo al formulario (como precarga),
+// que sirve de red de seguridad -- igual que ya hace la búsqueda por
+// dirección de ese mismo formulario.
+const mensajeChat = ref('')
+const procesandoChat = ref(false)
+const distritoDesdeChat = ref(null)
+const zonaDesdeChat = ref(null)
+const ubicacionDesdeChat = ref(null)
+const mensajeAclaracionChat = ref(null)
+
+async function onEnviarChat() {
+  const mensaje = mensajeChat.value.trim()
+  if (!mensaje) return
+
+  procesandoChat.value = true
+  cargando.value = true
+  distritoDesdeChat.value = null
+  zonaDesdeChat.value = null
+  ubicacionDesdeChat.value = null
+  mensajeAclaracionChat.value = null
+  codiDistrictePedido.value = null
+  ubicacionPedida.value = null
+  reiniciarResultados()
+
+  await chatInformeStream(mensaje, {
+    onAclaracion: (evento) => {
+      mensajeAclaracionChat.value = { tipo: 'aviso', texto: evento.mensaje }
+      if (evento.codi_districte) distritoDesdeChat.value = evento.codi_districte
+      if (evento.zona_pgm) zonaDesdeChat.value = evento.zona_pgm
+      if (evento.lat != null && evento.lon != null) {
+        ubicacionDesdeChat.value = { lat: evento.lat, lon: evento.lon }
+      }
+      procesandoChat.value = false
+      cargando.value = false
+    },
+    onUbicacion: (evento) => {
+      codiDistrictePedido.value = evento.codi_districte
+      ubicacionPedida.value = { lat: evento.lat, lon: evento.lon }
+    },
+    onDatos: (evento) => {
+      datosDistrito.value = evento.datos_distrito
+      respuestaLegal.value = evento.respuesta_legal
+      articulosCitados.value = evento.articulos_citados
+      cargando.value = false
+      procesandoChat.value = false
+    },
+    onToken: (texto) => {
+      textoSintesis.value += texto
+    },
+    onError: (detail) => {
+      error.value = detail
+      cargando.value = false
+      procesandoChat.value = false
+    },
+    onDone: (evento) => {
+      semaforoConfirmado.value = evento.semaforo
+      resumenConfirmado.value = evento.resumen
+      cargando.value = false
+      procesandoChat.value = false
+    },
+  })
+}
 </script>
 
 <template>
@@ -100,7 +170,40 @@ async function onGenerar({ codiDistricte, zonaPgm, ubicacion }) {
       </header>
 
       <section class="mb-8 rounded-xl border border-paper/15 bg-ink-light/50 p-6 shadow-lg backdrop-blur-sm">
-        <FormularioViabilidad :cargando="cargando" @generar="onGenerar" />
+        <label for="chat" class="mb-1.5 block text-xs font-medium tracking-wide text-paper/60 uppercase">
+          Cuéntanos qué quieres hacer
+        </label>
+        <div class="flex gap-2">
+          <textarea
+            id="chat"
+            v-model="mensajeChat"
+            rows="2"
+            placeholder="p. ej. Quiero abrir un bar en Carrer de Sant Pau 1, ¿me lo recomiendas?"
+            class="flex-1 resize-none rounded border border-paper/20 bg-ink-light px-3 py-2.5 text-paper placeholder:text-paper/30 focus:border-brass focus:ring-1 focus:ring-brass focus:outline-none"
+          />
+          <button
+            type="button"
+            @click="onEnviarChat"
+            :disabled="procesandoChat || !mensajeChat.trim()"
+            class="shrink-0 rounded bg-brass px-4 py-2.5 text-sm font-medium text-ink transition hover:bg-brass/90 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {{ procesandoChat ? 'Analizando…' : 'Enviar' }}
+          </button>
+        </div>
+        <p class="mt-2 text-xs text-paper/40">
+          O usa el formulario manual de abajo si prefieres elegir distrito y zona tú mismo.
+        </p>
+      </section>
+
+      <section class="mb-8 rounded-xl border border-paper/15 bg-ink-light/50 p-6 shadow-lg backdrop-blur-sm">
+        <FormularioViabilidad
+          :cargando="cargando"
+          :distrito-inicial="distritoDesdeChat"
+          :zona-inicial="zonaDesdeChat"
+          :ubicacion-inicial="ubicacionDesdeChat"
+          :mensaje-inicial="mensajeAclaracionChat"
+          @generar="onGenerar"
+        />
       </section>
 
       <div v-if="error" class="mb-8 flex items-center gap-3 rounded-lg border border-rojo/40 bg-rojo/10 px-5 py-4 text-sm text-paper shadow-sm">

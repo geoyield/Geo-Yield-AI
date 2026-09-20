@@ -135,3 +135,61 @@ export async function generarInformeStream(codiDistricte, zonaPgm, callbacks = {
     onError?.(error.message)
   }
 }
+
+/**
+ * Consume el endpoint del chat conversacional mediante Server-Sent Events.
+ *
+ * Además de los eventos habituales (datos/token/done/error), maneja dos
+ * propios de este flujo: 'aclaracion' (no se pudo resolver dirección,
+ * distrito o zona con confianza -- trae lo que sí se resolvió, para
+ * prellenar el formulario manual) y 'ubicacion' (todo resuelto, se
+ * informa antes de empezar a transmitir el informe, para centrar el
+ * mapa de inmediato).
+ */
+export async function chatInformeStream(mensaje, callbacks = {}) {
+  const { onAclaracion, onUbicacion, onDatos, onToken, onDone, onError } = callbacks
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/chat/informe/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mensaje }),
+    })
+
+    if (!response.ok) {
+      const body = await response.json().catch(() => null)
+      throw new Error(body?.detail || `Error ${response.status} al llamar a la API`)
+    }
+
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+
+      buffer += decoder.decode(value, { stream: true })
+      const bloques = buffer.split('\n\n')
+      buffer = bloques.pop() ?? ''
+
+      for (const bloque of bloques) {
+        if (!bloque.startsWith('data: ')) continue
+
+        try {
+          const evento = JSON.parse(bloque.slice(6))
+          if (evento.type === 'aclaracion') onAclaracion?.(evento)
+          else if (evento.type === 'ubicacion') onUbicacion?.(evento)
+          else if (evento.type === 'datos') onDatos?.(evento)
+          else if (evento.type === 'token') onToken?.(evento.text)
+          else if (evento.type === 'done') onDone?.(evento)
+          else if (evento.type === 'error') onError?.(evento.detail)
+        } catch (e) {
+          console.warn('Error parseando bloque SSE del chat:', bloque)
+        }
+      }
+    }
+  } catch (error) {
+    onError?.(error.message)
+  }
+}

@@ -16,6 +16,7 @@ from sqlalchemy import text
 from backend.db.models import Competitor, District, DistrictIncome, DistrictMobility, LegalChunk
 from backend.ia.agent import (
     SYNTHESIS_SYSTEM_PROMPT,
+    _construir_pregunta_legal,
     generar_informe_viabilidad,
     generar_informe_viabilidad_stream,
     zonas_pgm_disponibles,
@@ -261,3 +262,49 @@ class TestGenerarInformeViabilidadStream:
         assert evento_datos["datos_distrito"]["nom_districte"] == "Ciutat Vella (dato de prueba)"
         assert evento_datos["respuesta_legal"] == "[texto legal distintivo]"
         assert evento_datos["articulos_citados"] == [{"numero_articulo": "302", "fuente_legal": "PGM (Secció V)"}]
+
+
+class TestPreguntaEspecificaDelChat:
+    def test_construir_pregunta_legal_sin_pregunta_especifica_no_cambia(self):
+        # El comportamiento existente (sin pregunta específica) no debe
+        # cambiar en absoluto -- mismo texto que antes de esta extensión.
+        pregunta = _construir_pregunta_legal("nucli_antic")
+        assert "Además, el usuario pregunta específicamente" not in pregunta
+
+    def test_construir_pregunta_legal_incluye_la_pregunta_especifica(self):
+        pregunta = _construir_pregunta_legal("nucli_antic", pregunta_especifica="terrazas")
+        assert "terrazas" in pregunta
+
+    def test_regression_refuerza_no_inventar_cuando_hay_pregunta_especifica(self):
+        # Regresión directa del riesgo de invención confirmado en esta
+        # sesión (el caso de las terrazas): cuando hay una pregunta
+        # específica, la pregunta legal debe reforzar explícitamente que
+        # si no hay normativa concreta sobre ello, hay que decirlo, no
+        # inventarlo.
+        pregunta = _construir_pregunta_legal("industrial", pregunta_especifica="terrazas")
+        assert "dilo explícitamente" in pregunta
+        assert "en vez de responder con seguridad" in pregunta
+
+    def test_generar_informe_stream_propaga_pregunta_especifica_al_rag(
+        self, db_session, distrito_ciutat_vella, articulo_302
+    ):
+        # Confirma que la pregunta específica llega de verdad hasta la
+        # llamada al RAG, no solo que la función auxiliar la construye
+        # bien de forma aislada.
+        preguntas_recibidas = []
+
+        class ClienteQueRegistraPreguntas(ScriptedLLMClient):
+            def create(self, model, max_tokens, system, messages):
+                if system != SYNTHESIS_SYSTEM_PROMPT:
+                    preguntas_recibidas.append(messages[0]["content"])
+                return super().create(model, max_tokens, system, messages)
+
+        client = ClienteQueRegistraPreguntas(synthesis_response="VERDE\nResumen.")
+        list(
+            generar_informe_viabilidad_stream(
+                db_session, codi_districte=distrito_ciutat_vella, zona_pgm="nucli_antic",
+                embed_fn=hash_embed, llm_client=client, pregunta_especifica="horarios de cierre",
+            )
+        )
+        assert len(preguntas_recibidas) == 1
+        assert "horarios de cierre" in preguntas_recibidas[0]
