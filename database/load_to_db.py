@@ -15,7 +15,7 @@ Estrategia de carga (snapshot único, decisión validada con el usuario):
       "fantasmas" de locales que ya no existen; un reemplazo completo es
       más correcto para este caso que un upsert selectivo.
 """
-
+import logging
 
 import pandas as pd
 from dotenv import load_dotenv
@@ -23,6 +23,9 @@ from geoalchemy2.elements import WKTElement
 from sqlalchemy import create_engine
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
+
+import sys
+sys.path.insert(0, '/home/claud/pontia/PJ')
 
 from backend.db import Base
 from backend.db.connection import resolve_database_url

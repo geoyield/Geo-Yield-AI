@@ -28,7 +28,7 @@ def read_raw_mobility(path) -> pd.DataFrame:
     que ya perdió su cero inicial. Mismo patrón de bug que en income.py con
     el separador de miles.
     """
-    return pd.read_csv(path, sep="|", dtype={"destino": str, "origen": str})
+    return pd.read_csv(path, sep="|", dtype={"destino": str, "origen": str}, compression='infer')
 
 
 def build_district_mobility(raw_df: pd.DataFrame) -> pd.DataFrame:

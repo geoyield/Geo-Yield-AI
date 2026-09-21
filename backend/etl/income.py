@@ -76,7 +76,7 @@ def build_district_income(raw_df: pd.DataFrame) -> pd.DataFrame:
 
     df["Periodo"] = df["Periodo"].astype(int)
 
-    is_barcelona = df["Municipio"].astype(str).str.contains(BARCELONA_MUNICIPIO_CODE, na=False)
+    """ is_barcelona = df["Municipio"].astype(str).str.contains(BARCELONA_MUNICIPIO_CODE, na=False)
     is_district_level = df["Distritos"].notna() & df["Secciones"].isna()
     is_target_indicator = df["Indicador"] == INDICATOR_NAME
 
@@ -89,7 +89,7 @@ def build_district_income(raw_df: pd.DataFrame) -> pd.DataFrame:
         )
 
     latest_period = df["Periodo"].max()
-    df = df[df["Periodo"] == latest_period]
+    df = df[df["Periodo"] == latest_period] """
 
     df["codi_districte"] = df["Distritos"].apply(_extract_district_number)
     df["renta_media"] = df["Renta_Media"].apply(_parse_spanish_number)
