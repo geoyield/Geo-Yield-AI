@@ -16,7 +16,7 @@ pgvector==0.5.0
 
 # --- RAG legal ---
 sentence-transformers==5.7.0
-anthropic==0.122.0
+#anthropic==0.122.0
 
 # --- Agente orquestador ---
 langgraph==1.2.11
@@ -36,17 +36,6 @@ google-genai==2.18.1
 # del equipo depende de una API de pandas 2.x ya retirada en 3.0, avisad y
 # se fija la versión anterior en su lugar.
 pandas==3.0.2
-
-# --- Observability: direct CloudWatch shipping (OPTIONAL) ---
-# Only needed with LOG_CLOUDWATCH_ENABLED=true, i.e. when the host does NOT
-# collect stdout (the Render case). On ECS/Fargate/App Runner the host driver
-# already ships stdout and these two are unnecessary.
-#
-# The import is lazy (backend/observability/cloudwatch.py), so the app starts
-# fine without them while the flag stays false. Left commented out so boto3
-# (~15 MB with transitives) is not imposed on anyone who does not need it.
-# boto3==1.41.20
-# watchtower==3.5.0
 
 # --- Testing ---
 pytest==8.3.5

@@ -18,10 +18,11 @@ PROCESSED_DATA_DIR = REPO_ROOT / "data" / "processed"
 # Data BCN, INE) — no se renombran, para poder reemplazarlos sin fricción
 # cuando lleguen nuevas descargas con el mismo patrón de nombre.
 PATH_CENSCOMER = RAW_DATA_DIR / "241021_censcomercialbcn_opendata_2024_v5.csv"
-PATH_INE_RENTA = RAW_DATA_DIR / "30896.csv"
+#PATH_INE_RENTA = RAW_DATA_DIR / "30896.csv"
+PATH_INE_RENTA = RAW_DATA_DIR / "quina_merda.csv"
 # .csv.gz: MITMA lo distribuye comprimido. pandas.read_csv detecta la
 # compresión gzip automáticamente por la extensión, sin parámetros extra.
-PATH_MITMA_MOBILITY = RAW_DATA_DIR / "20251015_Viajes_distritos.csv.gz"
+PATH_MITMA_MOBILITY = RAW_DATA_DIR / "20250601_Viajes_distritos_bcnc.csv"
 
 # Código INE del municipio de Barcelona (provincia 08 + municipio 019).
 # Toda la lógica de filtrado geográfico de la Fase 1 gira en torno a este

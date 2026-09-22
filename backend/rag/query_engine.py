@@ -16,7 +16,11 @@ from sqlalchemy.orm import Session
 from backend.db.models import LegalChunk
 from backend.rag.embeddings import EmbeddingFunction, embed_texts
 
+from sentence_transformers import CrossEncoder
+
 DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+
+RERANK_MODEL = os.getenv("RERANK_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")
 
 SYSTEM_PROMPT = """INSTRUCCIÓN DE IDIOMA (síguela siempre, sin excepción): responde en el MISMO idioma en el que esté escrita la pregunta del usuario. El contexto normativo que recibes está en catalán, pero eso NO determina el idioma de tu respuesta — solo el idioma de la pregunta del usuario lo determina. Si la pregunta está en castellano, responde en castellano, traduciendo o parafraseando el contenido normativo según haga falta.
 
@@ -77,7 +81,7 @@ def retrieve_relevant_chunks(
     session: Session,
     query: str,
     embed_fn: EmbeddingFunction = embed_texts,
-    top_k: int = 3,
+    top_k: int = 10,
     zona_pgm: str | None = None,
 ) -> list[RetrievedChunk]:
     """
@@ -110,6 +114,38 @@ def retrieve_relevant_chunks(
         )
         for r in results
     ]
+
+def retrieve_relevant_chunks_with_rerank(session: Session,
+                                         query: str,
+                                         embed_fn: EmbeddingFunction = embed_texts,
+                                         top_k: int = 10,
+                                         zona_pgm: str | None = None,
+                                         cross_encoder_model: str = RERANK_MODEL,
+                                         final_top_k: int = 4) -> list[RetrievedChunk]:
+
+    """"
+    lleva a cabo un reranking de la lista obtenida con retrieve_relevant_chunks
+
+    Args:
+        query: la query con que se ha obtenido la lista de chunks a rerankear
+        chunks: lista de de chunks obtenida con retrieve_relevant:chunks
+        top_k: El número de chunks a retornar
+
+    Returns:
+        First top_k chunks rerankend chunks
+    """
+
+    chunks = retrieve_relevant_chunks(session, query, embed_fn, top_k, zona_pgm)
+
+    model = CrossEncoder(cross_encoder_model)
+
+    texts = [f'{c.numero_articulo}||{c.titulo}||{c.contenido}||{c.fuente_legal}' for c in chunks]
+
+    ranks = model.rank(query, texts, final_top_k)
+
+    # corpus_id es el índide en la lista original de RetrievedChunks
+    return [chunks[r['corpus_id']] for r in ranks]
+
 
 
 def build_context(chunks: list[RetrievedChunk]) -> str:
