@@ -49,7 +49,7 @@ from backend.geo.geocoding import geocodificar_direccion
 
 from langgraph.graph import StateGraph, START, END
 from langgraph.prebuilt  import tools_condition, ToolNode
-from langgraph.checkpoint.memory import MemorySaver  
+from langgraph.checkpoint.postgres import PostgresSaver
 from IPython.display import Image, display 
 from typing import Literal
 
@@ -196,8 +196,10 @@ def summarize_check(state: State)-> Literal ["summarize_conversation",END]:
         return "summarize_conversation"
     return END
 
-# Memoria
-memory = MemorySaver()
+# Memoria persistente en PostgreSQL
+checkpointer_context = PostgresSaver.from_conn_string(resolve_database_url())
+checkpointer = checkpointer_context.__enter__()
+checkpointer.setup()
 
 # Grafo
 builder = StateGraph(MessagesState)
@@ -217,7 +219,7 @@ builder.add_conditional_edges(
 )
 builder.add_edge('tools', 'assistant')
 builder.add_edge('summarize', END)
-react_graph = builder.compile(checkpointer=memory)
+react_graph = builder.compile(checkpointer=checkpointer)
 
 #### FUNCIÓN DE LLAMADA AL ASISTENTE
 def request(content: str, thread: str) -> str:
