@@ -1,10 +1,13 @@
 """
-Motor de consulta RAG sobre el corpus de normativa legal.
+==============================================================================
+RAG PIPELINE: SEMANTIC QUERY ENGINE
+==============================================================================
+File: backend/rag/query_engine.py
 
-Recupera los artículos más relevantes por similitud semántica y genera
-una respuesta con el LLM, citando siempre la norma y el artículo exactos.
-Al filtrar por zona PGM, combina la normativa específica de la zona con
-la normativa general aplicable en toda la ciudad.
+This module orchestrates the core Retrieval-Augmented Generation (RAG) flow.
+It vectorizes the user's question, performs a semantic similarity search 
+against the PostGIS (pgvector) database, builds a context prompt, and 
+generates the final answer using the LLM (Gemini via Adapter).
 """
 
 import os
@@ -16,8 +19,17 @@ from sqlalchemy.orm import Session
 from backend.db.models import LegalChunk
 from backend.rag.embeddings import EmbeddingFunction, embed_texts
 
+# Allows seamless upgrades to newer Gemini models via environment variables
 DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
+# ------------------------------------------------------------------------------
+# PROMPT ENGINEERING
+# ------------------------------------------------------------------------------
+# 1. Cross-lingual mapping: The corpus is in Catalan, but the LLM is instructed 
+#    to dynamically translate the answer to the user's query language.
+# 2. Strict Citation: Anti-hallucination mechanism. The LLM must cite the source.
+# 3. UI Constraint: Markdown is banned because the frontend map popups do not 
+#    support rendering Markdown tokens (*, #), preventing ugly raw text on the UI.
 SYSTEM_PROMPT = """INSTRUCCIÓN DE IDIOMA (síguela siempre, sin excepción): responde en el MISMO idioma en el que esté escrita la pregunta del usuario. El contexto normativo que recibes está en catalán, pero eso NO determina el idioma de tu respuesta — solo el idioma de la pregunta del usuario lo determina. Si la pregunta está en castellano, responde en castellano, traduciendo o parafraseando el contenido normativo según haga falta.
 
 Eres un asistente legal especializado en normativa urbanística de Barcelona (Pla General Metropolità, PGM).
@@ -31,7 +43,7 @@ Esta respuesta es orientativa, no un dictamen legal vinculante — recomienda si
 
 @dataclass
 class RetrievedChunk:
-    """Representa un fragmento de texto legal recuperado de la base de datos."""
+    """DTO for chunks successfully retrieved from the Vector Database."""
     numero_articulo: str
     titulo: str
     contenido: str
@@ -46,22 +58,23 @@ def _query_chunks(
     zona_filter: str | bool | None
 ) -> Sequence[Any]:
     """
-    Ejecuta la consulta vectorial en la base de datos.
+    Executes the vector similarity search in PostGIS.
 
     Args:
-        session: Sesión activa de SQLAlchemy.
-        query_embedding: Vector que representa la pregunta del usuario.
-        top_k: Número máximo de resultados a recuperar.
-        zona_filter:
-            - str: filtra por esa zona_pgm exacta.
-            - False: filtra normativa general (zona_pgm IS NULL).
-            - None: sin filtro de zona (busca en todo el corpus).
+        session: SQLAlchemy active session.
+        query_embedding: The vectorized user question.
+        top_k: Limit of chunks to retrieve.
+        zona_filter: 
+            - str: Exact zoning code (e.g., 'nucli_antic').
+            - False: General City Law (zona_pgm IS NULL).
+            - None: Unfiltered search across the entire corpus.
     """
     stmt = session.query(
         LegalChunk.numero_articulo,
         LegalChunk.titulo,
         LegalChunk.contenido,
         LegalChunk.fuente_legal,
+        # pgvector's <=> operator translates to cosine_distance in SQLAlchemy
         LegalChunk.embedding.cosine_distance(query_embedding).label("distancia"),
     )
 
@@ -81,20 +94,23 @@ def retrieve_relevant_chunks(
     zona_pgm: str | None = None,
 ) -> list[RetrievedChunk]:
     """
-    Recupera los artículos más cercanos por similitud coseno a la consulta.
-
-    Si se indica `zona_pgm`, combina los `top_k` artículos de esa zona exacta
-    con los `top_k` artículos de normativa general (aplicable a toda la ciudad),
-    y los ordena globalmente por relevancia -- un artículo general más
-    relevante que uno de zona aparece primero, en vez de agruparse siempre
-    por "de dónde viene".
+    Domain-Aware Retrieval Strategy.
+    
+    A naïve RAG simply queries the entire DB. Here, if the user asks about a 
+    specific zone (e.g., 'nucli_antic'), we query the top K laws for that exact 
+    zone, AND the top K general city laws. We then merge both lists and sort 
+    them globally by absolute cosine distance. This ensures the LLM receives a 
+    balanced context of both hyper-local zoning rules and general municipal codes.
     """
+    # 1. Embed the user's natural language question
     query_embedding = embed_fn([query])[0]
 
+    # 2. Execute Hybrid Retrieval
     if zona_pgm is not None:
         chunks_especificos = _query_chunks(session, query_embedding, top_k, zona_pgm)
         chunks_generales = _query_chunks(session, query_embedding, top_k, False)
 
+        # Merge and sort by the closest semantic match across both sub-queries
         results = list(chunks_especificos) + list(chunks_generales)
         results.sort(key=lambda r: r.distancia)
     else:
@@ -113,7 +129,7 @@ def retrieve_relevant_chunks(
 
 
 def build_context(chunks: list[RetrievedChunk]) -> str:
-    """Construye el bloque de texto con el contexto legal para el LLM."""
+    """Compiles the retrieved DTOs into a single prompt block for the LLM."""
     return "\n\n".join(
         f"--- {c.fuente_legal}, Artículo {c.numero_articulo}: {c.titulo} ---\n{c.contenido}"
         for c in chunks
@@ -131,15 +147,18 @@ def generate_answer(
     zona_pgm: str | None = None,
 ) -> dict[str, Any]:
     """
-    Recupera contexto legal y genera una respuesta con el modelo de lenguaje.
-
-    Devuelve un diccionario con la respuesta generada y los chunks utilizados.
+    Final Generation Step (The 'G' in RAG).
+    Passes the strict system instructions, the retrieved legal context, and 
+    the user's question to the LLM Adapter.
     """
     chunks = retrieve_relevant_chunks(
         session, question, embed_fn=embed_fn, top_k=top_k, zona_pgm=zona_pgm
     )
 
+    # Fast-fail if the database is empty or no relevant vectors are found
     if not chunks:
+        # Known Bug (Technical Debt): This fallback is hardcoded in Catalan, 
+        # violating the dynamic language rule defined in the SYSTEM_PROMPT.
         return {
             "respuesta": "No hi ha normativa carregada a la base de dades encara.",
             "chunks_recuperados": []
@@ -148,6 +167,7 @@ def generate_answer(
     context = build_context(chunks)
     user_message = f"CONTEXT NORMATIU:\n{context}\n\nPREGUNTA: {question}"
 
+    # Lazy load the Adapter to prevent cyclic dependencies or unnecessary imports
     if llm_client is None:
         from backend.rag.gemini_adapter import GeminiAsAnthropicAdapter
         llm_client = GeminiAsAnthropicAdapter()

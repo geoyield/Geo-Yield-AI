@@ -1,17 +1,23 @@
 """
-Tests del chunker de normativa legal (backend/rag/chunking.py).
+==============================================================================
+UNIT TESTS: LEGAL RAG CHUNKER
+==============================================================================
+File: tests/unit_tests/test_chunking.py
 
-Los fixtures de este módulo usan fragmentos reales copiados del portal
-NUMAMB del AMB (compartidos por el usuario) o extraídos con pdftotext de
-los PDF reales que subió — no texto inventado. Esto incluye las
-inconsistencias reales de la fuente (ver tests de regresión abajo).
+Tests the semantic segmentation logic defined in `backend/rag/chunking.py`.
+
+Testing Strategy:
+The string fixtures used in these tests are NOT fake 'Lorem Ipsum' text. 
+They are literal copy-pastes of the raw `pdftotext` output from real 
+government Urban Planning (PGM) documents. This guarantees the Regex 
+engine is tested against the actual formatting inconsistencies of the source.
 """
 
 from backend.rag.chunking import VersioArticle, parse_legal_chunks, select_current_versions
 
 
 class TestParseLegalChunksWebFormat:
-    """Formato 'copy-paste de la web': varios artículos seguidos, con 'Descarregar'."""
+    """Tests the parsing logic against the format obtained by copy-pasting the web."""
 
     def test_parses_simple_article(self):
         text = """Article 278. Ús comercial
@@ -31,6 +37,11 @@ Llegir més
         assert "Llegir més" not in chunks[0].contenido
 
     def test_regression_missing_closing_parenthesis(self):
+        """
+        Regression Test: Real-world typos in the government portal.
+        Article 302 was missing a closing parenthesis in 'consolidat'.
+        The Regex must be robust enough to handle these institutional typos.
+        """
         text = """Article 302 (consolidat. Zona de nucli antic
 
 
@@ -52,6 +63,7 @@ Llegir més
         assert chunks[0].versio == VersioArticle.CONSOLIDAT
 
     def test_regression_multiline_trailing_navigation_noise(self):
+        """Ensures that internal UI navigation links are not embedded as legal text."""
         text = """Article 225 (consolidat). Planta baixa
 
 
@@ -74,6 +86,7 @@ Llegir més
         assert "Article 225" not in content
 
     def test_parses_multiple_articles_in_sequence(self):
+        """Ensures the regex accurately finds boundaries between adjacent articles."""
         text = """Article 311. Zona industrial
 
 
@@ -95,6 +108,7 @@ Llegir més
         assert "cafeteries" not in chunks[1].contenido
 
     def test_article_with_letter_suffix(self):
+        """Verifies that article numbers with letters (e.g., 285bis) are parsed."""
         text = """Article 285bis. Habitatge assequible
 
 
@@ -112,9 +126,8 @@ Llegir més
 
 class TestParseLegalChunksPdfFormat:
     """
-    Formato 'PDF exportado desde el navegador' (un único artículo, con sus
-    versiones históricas apiladas). Fixtures basados en pdftotext real
-    contra los PDF que subió el usuario (Article_302.pdf, Article_303.pdf).
+    Tests the parsing logic against the format obtained by exporting the 
+    browser page to PDF (which stacks historical versions on top of each other).
     """
 
     def test_pdf_format_has_no_descarregar(self):
@@ -129,11 +142,13 @@ S'admeten les cafeteries, restaurants, bars i similars.
         assert "Descarregar" not in text
 
     def test_regression_title_wraps_across_lines(self):
-        # Regresión real y grave: los títulos largos se parten en 2 líneas
-        # al extraer el PDF. Comprobar solo la primera línea siguiente para
-        # encontrar el ancla hacía que la versión CONSOLIDADA se descartara
-        # en silencio, dejando la ORIGINAL (desactualizada) como única
-        # opción — un error grave para un sistema legal.
+        """
+        CRITICAL REGRESSION TEST:
+        Long titles wrap to a new line in the PDF output. Originally, this caused 
+        the parser to completely miss the 'Consolidated' version, leaving the LLM 
+        with the outdated 1985 original law. This test ensures the Regex allows 
+        for multiline matching without losing the title anchor.
+        """
         text = """Article 302 (consolidat. Zona de nucli antic: de substitució de
 l'edificació antiga i de conservació del Centre històric
 Darrera modificació: 14.12.2018
@@ -150,6 +165,10 @@ En aquesta zona es permeten els usos següents:
         )
 
     def test_selects_consolidat_over_original_when_both_present(self):
+        """
+        Compliance Verification:
+        Guarantees the system drops the repealed law and keeps the active one.
+        """
         text = """Article 303 (consolidat). Zones en densificació urbana (intensiva i
 semiintensiva)
 Darrera modificació: 14.12.2018
@@ -177,6 +196,11 @@ S'admeten les cafeteries, restaurants, bars i similars.
         assert current[0].versio == VersioArticle.ORIGINAL
 
     def test_modificacio_parcial_never_selected(self):
+        """
+        Compliance Verification:
+        Guarantees that incomplete '[...]' partial modifications are NEVER 
+        passed to the LLM, as they lack the full context of the law.
+        """
         text = """Article 302 (consolidat). Zona de nucli antic
 Darrera modificació: 14.12.2018
 Text consolidat que incorpora les modificacions dels expedients anteriors
@@ -196,6 +220,7 @@ Comercial. Texto original desactualizado.
         assert current[0].versio == VersioArticle.CONSOLIDAT
 
     def test_strips_page_header_and_footer_boilerplate(self):
+        """Verifies that visual PDF artifacts do not pollute the text embedding."""
         text = """13/8/26, 23:02
 
 Índex normes urbanístiques - Territori - Àrea Metropolitana de Barcelona

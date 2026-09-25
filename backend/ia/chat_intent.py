@@ -1,15 +1,15 @@
 """
-Extracción de intención del chat conversacional.
+==============================================================================
+NATURAL LANGUAGE UNDERSTANDING (NLU): INTENT EXTRACTION
+==============================================================================
+File: backend/ia/chat_intent.py
 
-Convierte una frase libre del usuario en los parámetros estructurados
-que el resto del pipeline ya sabe manejar: una dirección a geocodificar,
-y una pregunta específica opcional si el usuario mencionó algo concreto
-más allá de "es viable o no" (terrazas, horarios, aforo...).
-
-Es una única llamada al LLM, no un agente con herramientas ni memoria --
-todo lo demás (geocodificación, identificación de zona, generación del
-informe) se apoya en el pipeline ya existente y probado
-(geocoding.py, amb_identify.py, agent.py), sin tocarlo.
+Converts a free-text user message into structured, deterministic parameters (JSON).
+Architectural Note (Extraction vs. Autonomous Agent):
+This is a single, stateless LLM call. It does NOT use tools or conversational 
+memory. It simply translates human language into a dictionary format that the 
+pre-existing, battle-tested geospatial pipeline (geocoding, amb_identify, RAG) 
+can consume natively.
 """
 
 import json
@@ -17,6 +17,7 @@ import logging
 
 logger = logging.getLogger("geoyield_chat")
 
+# Prompt Engineering: Strict Output Formatting & Anti-Hallucination Directives
 EXTRACCION_SYSTEM_PROMPT = """Extraes información estructurada de un mensaje de un usuario que quiere evaluar la viabilidad de abrir un bar o restaurante en Barcelona.
 
 Devuelve ÚNICAMENTE un objeto JSON con exactamente estas tres claves, sin texto adicional antes ni después, sin bloques de código Markdown:
@@ -32,19 +33,15 @@ No inventes una dirección ni un distrito si no aparecen en el mensaje. No inven
 
 def extraer_intencion(mensaje: str, llm_client=None, model: str | None = None) -> dict:
     """
-    Devuelve {"direccion": str | None, "distrito_mencionado": str | None,
-    "pregunta_especifica": str | None}.
+    Returns {"direccion": str | None, "distrito_mencionado": str | None, "pregunta_especifica": str | None}.
 
-    distrito_mencionado cubre el caso de alguien que conoce la zona
-    general pero no da una calle exacta (p. ej. "conozco Les Corts, qué
-    me recomiendas ahí") -- sin esto, esos mensajes no tendrían ninguna
-    ubicación que extraer, aunque el usuario sí haya dado información
-    real y utilizable.
+    Note on `distrito_mencionado`: Handles cases where the user provides general 
+    location context but no exact street (e.g., "I know Les Corts, what do you recommend?").
 
-    Si el LLM no devuelve un JSON válido o falla la llamada, se asume que
-    no se pudo extraer nada -- nunca se inventa una dirección o distrito
-    para forzar que el flujo continúe; el llamador debe pedir aclaración
-    en ese caso.
+    Fail-Safe Design: 
+    If the LLM fails to return valid JSON, the function safely degrades by returning 
+    None for all fields, forcing the downstream Orchestrator to ask for clarification 
+    rather than hallucinating an address to force the workflow to continue.
     """
     from backend.rag.gemini_adapter import GeminiAsAnthropicAdapter
     from backend.rag.query_engine import DEFAULT_MODEL
@@ -64,8 +61,8 @@ def extraer_intencion(mensaje: str, llm_client=None, model: str | None = None) -
         logger.exception("Error llamando al LLM para extraer intención del chat")
         return {"direccion": None, "distrito_mencionado": None, "pregunta_especifica": None}
 
-    # El LLM a veces envuelve el JSON en bloques de Markdown pese a que
-    # se le pide explícitamente que no lo haga.
+    # Defensive Parsing: LLMs frequently hallucinate Markdown syntax even when 
+    # explicitly instructed not to. This cleanly strips the syntax before parsing.
     texto = texto.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
 
     try:
@@ -74,6 +71,7 @@ def extraer_intencion(mensaje: str, llm_client=None, model: str | None = None) -
         logger.warning("El LLM no devolvió JSON válido al extraer intención: %r", texto)
         return {"direccion": None, "distrito_mencionado": None, "pregunta_especifica": None}
 
+    # Enforces the deterministic schema, defaulting missing keys to None
     return {
         "direccion": datos.get("direccion") or None,
         "distrito_mencionado": datos.get("distrito_mencionado") or None,

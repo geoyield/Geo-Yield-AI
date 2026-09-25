@@ -1,7 +1,12 @@
 """
-Orquestador de carga del corpus del PGM (Fase 2). Reconstruido tras
-reinicio de sandbox, actualizado a la migración 0005 (upsert por
-(fuente_legal, numero_articulo) en vez de solo numero_articulo).
+==============================================================================
+RAG PIPELINE: LEGAL CORPUS INGESTION ORCHESTRATOR
+==============================================================================
+File: database/load_legal_corpus.py
+
+This script acts as the master orchestrator for the RAG data ingestion pipeline.
+It iterates through a directory of raw PDFs, chaining the sub-modules:
+Extraction -> Chunking & Version Filtering -> Batch Embedding -> DB Upsert.
 """
 
 import logging
@@ -10,6 +15,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
+# Explicit import from PostgreSQL dialect to access the ON CONFLICT clause
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -28,30 +34,37 @@ PGM_FUENTE_LEGAL = "PGM (Secció V)"
 def load_corpus_from_directory(
     session: Session, pdf_dir: Path, embed_fn: EmbeddingFunction = embed_texts
 ) -> int:
+    """Orchestrates the Extraction, Transformation, and Vectorization processes."""
     pdf_paths = sorted(pdf_dir.glob("*.pdf"))
     if not pdf_paths:
         logger.warning(f"No se encontraron PDF en {pdf_dir}")
         return 0
 
+    # 1. Extraction and Chunking
     all_current_chunks = []
     for pdf_path in pdf_paths:
         logger.info(f"Procesando {pdf_path.name}...")
         text = extract_text_from_pdf(pdf_path)
         versions = parse_legal_chunks(text)
         if not versions:
-            logger.warning(f"{pdf_path.name}: no se detectó ningún artículo, se omite.")
+            logger.warning(f"{pdf_path.name}: No articles detected, skipping.")
             continue
         current = select_current_versions(versions)
         for chunk in current:
             all_current_chunks.append((chunk, pdf_path.name))
 
     if not all_current_chunks:
-        logger.warning("Ningún artículo válido tras procesar los PDF.")
+        logger.warning("No valid articles remained after parsing PDFs.")
         return 0
 
+    # 2. Batch Vectorization (Performance Optimization)
+    # We do NOT embed articles one by one inside the previous loop.
+    # We collect them all and pass the entire list to the Embedding model. 
+    # ML models (like Torch) are highly optimized for batch processing.
     logger.info(f"Generando embeddings para {len(all_current_chunks)} artículos...")
     embeddings = embed_fn([chunk.contenido for chunk, _ in all_current_chunks])
 
+    # 3. Database Preparation & Pre-computation
     records = [
         {
             "fuente_legal": PGM_FUENTE_LEGAL,
@@ -60,6 +73,8 @@ def load_corpus_from_directory(
             "contenido": chunk.contenido,
             "expedient": chunk.expedient,
             "versio": chunk.versio.value,
+            # Pre-compute the relation between Article and Zoning at ingestion time, 
+            # saving processing power during user queries (Compute once, read often).
             "zona_pgm": ARTICLE_TO_ZONA_PGM.get(chunk.numero_articulo),
             "documento_origen": source_filename,
             "embedding": embedding,
@@ -72,6 +87,9 @@ def load_corpus_from_directory(
         col: getattr(stmt.excluded, col)
         for col in ("titulo", "contenido", "expedient", "versio", "zona_pgm", "documento_origen", "embedding")
     }
+
+    # ON CONFLICT DO UPDATE allows us to run this script repeatedly without crashing.
+    # If a law is updated, it overwrites the old text and old mathematical vector.
     stmt = stmt.on_conflict_do_update(index_elements=["fuente_legal", "numero_articulo"], set_=update_columns)
     session.execute(stmt)
 
@@ -86,12 +104,12 @@ def run(pdf_dir: Path, engine=None, embed_fn: EmbeddingFunction = embed_texts) -
     with Session(engine) as session:
         count = load_corpus_from_directory(session, pdf_dir, embed_fn=embed_fn)
         session.commit()
-    logger.info("Carga del corpus legal completada.")
+    logger.info("Legal corpus ingestion completed.")
     return count
 
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
-        print("Uso: python -m database.load_legal_corpus <directorio con los PDF>")
+        print("Usage: python -m database.load_legal_corpus <path_to_pdf_directory>")
         sys.exit(1)
     run(Path(sys.argv[1]))

@@ -1,10 +1,29 @@
+<!-- 
+==============================================================================
+SINGLE PAGE APPLICATION (SPA) ENTRY POINT
+==============================================================================
+File: frontend/index.html
+
+This is the ONLY physical HTML file served to the client. Vite uses it as the 
+entry point for the dependency graph. Once loaded, Vue takes over and dynamically 
+manipulates the DOM inside the <div id="app">.
+-->
 <!doctype html>
 <html lang="es">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <!-- Branding -->
     <title>Geo-Yield-AI · Dossier de viabilidad</title>
+
+    <!-- 
+    Web Performance Optimization (WPO): 
+    'preconnect' instructs the browser to resolve DNS and establish TCP/TLS 
+    connections with Google's servers BEFORE the CSS requires the fonts. 
+    This prevents the "Flash of Unstyled Text" (FOUT) on slow networks.
+    -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -13,7 +32,14 @@
     />
   </head>
   <body>
+    <!-- The mounting point for the Vue application -->
     <div id="app"></div>
+
+    <!-- 
+    Modern JS Execution:
+    Vite leverages native ES Modules (type="module") during development, 
+    avoiding the need to bundle the entire app on every save.
+    -->
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>

@@ -1,14 +1,22 @@
+<!-- 
+==============================================================================
+VIABILITY FORM & GEOCODING FALLBACK
+==============================================================================
+File: frontend/src/components/ViabilityForm.vue
+
+Provides a manual fallback interface for District and Zoning Code selection.
+Acts as the ultimate "Safety Net" when the AI Agent or Geocoding API fails 
+to fully resolve a free-text address.
+-->
 <script setup>
 import { onMounted, ref, watch } from 'vue'
 import { geocodificarDireccion, obtenerDistritos, obtenerZonasPgm } from '../services/api.js'
 
 const emit = defineEmits(['generar'])
+
+// Props act as "pre-fill" commands sent from the Parent Orchestrator (App.vue)
 const props = defineProps({
   cargando: { type: Boolean, default: false },
-  // Precarga desde el chat: cuando la extracción de intención resuelve
-  // distrito/zona/ubicación (total o parcialmente), se reflejan aquí --
-  // el usuario sigue pudiendo corregirlos, igual que con la búsqueda por
-  // dirección de este mismo formulario.
   distritoInicial: { type: Number, default: null },
   zonaInicial: { type: String, default: null },
   ubicacionInicial: { type: Object, default: null },
@@ -21,20 +29,20 @@ const codiDistricte = ref(null)
 const zonaPgm = ref(null)
 const errorCarga = ref(null)
 
-// Búsqueda por dirección: autocompleta distrito y zona, pero nunca los
-// oculta ni los bloquea -- el usuario siempre puede corregirlos a mano,
-// sobre todo porque la zona no siempre se puede determinar con certeza.
+// ---------------------------------------------------------------------------
+// GEOCODING & TRI-STATE FEEDBACK
+// ---------------------------------------------------------------------------
 const direccionInput = ref('')
 const buscandoDireccion = ref(false)
 const mensajeDireccion = ref(null) // { tipo: 'exito' | 'aviso' | 'error', texto }
 
-// Coordenadas exactas de la última dirección geocodificada con éxito,
-// para centrar el mapa en el punto real en vez del distrito completo.
-// Se limpia si el usuario cambia el distrito a mano después de buscar
-// -- el punto ya no correspondería con seguridad a lo seleccionado.
 const ubicacionGeocodificada = ref(null) // { lat, lon } | null
 const distritoDeLaUbicacion = ref(null)
 
+// Geospatial Safeguard: 
+// If the user searches an address (saving precise lat/lon), but then manually 
+// changes the District dropdown, we MUST delete the cached coordinates. 
+// Otherwise, the Map would show a pin in District A while analyzing District B.
 watch(codiDistricte, (nuevo) => {
   if (distritoDeLaUbicacion.value !== null && nuevo !== distritoDeLaUbicacion.value) {
     ubicacionGeocodificada.value = null
@@ -42,8 +50,7 @@ watch(codiDistricte, (nuevo) => {
   }
 })
 
-// Precarga desde el chat -- mismo tratamiento que si el usuario hubiera
-// usado el campo de búsqueda de este formulario.
+// Sync props (from Chat) into local state
 watch(
   () => props.distritoInicial,
   (nuevo) => {

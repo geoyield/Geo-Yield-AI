@@ -1,14 +1,19 @@
 """
-Continuación de extraer_candidatos.py:
+==============================================================================
+DATA WRANGLING: MISSING ZONES & CROSS-REFERENCES
+==============================================================================
+File: scripts/investigacion_pgm/find_pending.py
 
-1. Trae el Artículo 304 (referencia cruzada citada dentro del 306).
-2. Busca en TODOS los artículos (no solo los del Títol IV) cualquier
-   título que mencione "desenvolupament" -- las claus 19, 20b y 22b no
-   aparecieron en el Títol IV, pero podrían regularse en otra sección
-   del PGM dedicada específicamente a zonas de desarrollo pendiente.
+Continuation of `extract_candidates.py`:
 
-No asigna zona_pgm ni carga nada a la base de datos: solo busca y
-muestra, para decidir después de leer el contenido real.
+1. Fetches Article 304 (a cross-reference cited inside Article 306).
+2. Searches across ALL articles (not just 'Títol IV') for any title mentioning 
+   "desenvolupament" (development). The GIS keys 19, 20b, and 22b did not appear 
+   in the expected chapter, but they might be regulated elsewhere in the PGM.
+
+Note: This script does not assign `zona_pgm` or load anything into the database. 
+It only searches and displays the data so the developer can read the actual 
+content and make a decision.
 """
 
 import json
@@ -16,6 +21,12 @@ import re
 
 
 def limpiar_html(texto: str) -> str:
+    """
+    Data Sanitization:
+    Government APIs often return text polluted with raw HTML tags instead of 
+    pure JSON strings. This function strips tags and decodes HTML entities 
+    to make the text readable for manual review.
+    """
     if not texto:
         return ""
     texto = re.sub(r"<br\s*/?>", "\n", texto)
@@ -28,12 +39,15 @@ def limpiar_html(texto: str) -> str:
 
 
 def main():
-    with open("respuesta_cruda.json", encoding="utf-8") as f:
+    # Load the raw JSON payload downloaded in step 1 (diagnostico_amb.py)
+    with open("raw_response.json", encoding="utf-8") as f:
         data = json.load(f)
 
     items = data["items"]
 
     # 1. Artículo 304 (referencia cruzada del 306)
+    # RAG Completeness: If Article 306 relies on rules defined in 304, 
+    # the AI will hallucinate if 304 is missing from the Vector Database.
     print("=" * 70)
     print("ARTÍCULO 304 (referencia cruzada citada en el 306)")
     print("=" * 70)
@@ -49,6 +63,7 @@ def main():
 
     # 2. Búsqueda ampliada de "desenvolupament" en TODOS los 574 artículos,
     #    no solo los del Títol IV -- para 19, 20b, 22b.
+    # Exhaustive Search: Don't assume data lives where it "should" live.
     print()
     print("=" * 70)
     print("BÚSQUEDA AMPLIADA: 'desenvolupament' en TODOS los artículos")

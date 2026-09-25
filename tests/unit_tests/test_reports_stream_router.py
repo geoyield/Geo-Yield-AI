@@ -1,9 +1,14 @@
 """
-Test adicional del router de informes: el endpoint de streaming
-(POST /api/informes/stream). Confirma el formato Server-Sent Events, que
-la sesión de BD permanece abierta durante todo el streaming, y que los
-valores Decimal que vienen de Postgres (renta_media, opportunity_score...)
-se serializan correctamente a JSON.
+==============================================================================
+UNIT TESTS: AI AGENT STREAMING ROUTER (SSE)
+==============================================================================
+File: tests/unit_tests/test_reports_stream_router.py
+
+Tests the Server-Sent Events (SSE) streaming endpoint (`POST /api/reports/stream`).
+Validates that:
+1. The endpoint correctly formats events according to the W3C SSE standard.
+2. The Database Session remains open throughout the entire LLM generation process.
+3. Database `Decimal` types (from PostgreSQL) are correctly serialized into JSON.
 """
 
 from decimal import Decimal
@@ -16,7 +21,12 @@ from backend.api.deps import get_session
 
 
 class FakeSessionQueRegistraCierre:
-    """Session simulada que registra si se cerró antes de que el streaming terminara."""
+    """
+    Sentinel Mock Object: 
+    Registers if the Database Session was closed prematurely. In generator-based 
+    streaming APIs, a common bug is the session closing after the first yield, 
+    crashing the system mid-stream.
+    """
 
     def __init__(self):
         self.cerrada = False
@@ -32,6 +42,7 @@ def fake_get_session():
 
 
 def eventos_de_prueba(session, codi_districte, zona_pgm, **kwargs):
+    """Mocks the LLM Agent yielding partial events over time."""
     yield {"type": "datos", "datos_distrito": {"nom_districte": "Ciutat Vella"}, "respuesta_legal": "x", "articulos_citados": ["302"]}
     assert not session.cerrada, "la sesión se cerró antes de terminar el streaming"
     yield {"type": "token", "text": "VERDE"}
@@ -40,10 +51,12 @@ def eventos_de_prueba(session, codi_districte, zona_pgm, **kwargs):
 
 
 def eventos_con_decimal_real(session, codi_districte, zona_pgm, **kwargs):
-    # Regresión real: datos_distrito, tal como lo entrega generar_informe_
-    # viabilidad_stream sin pasar por un esquema Pydantic, trae Decimal
-    # (no float) para los campos numéricos -- exactamente lo que devuelve
-    # psycopg2/SQLAlchemy al leer columnas Numeric de Postgres.
+    """
+    Regression Mock: 
+    Simulates raw data coming directly from a PostgreSQL `Numeric` column. 
+    SQLAlchemy maps Postgres Numerics to Python `Decimal` objects, which are 
+    NOT natively JSON serializable.
+    """
     yield {
         "type": "datos",
         "datos_distrito": {
@@ -60,11 +73,12 @@ def eventos_con_decimal_real(session, codi_districte, zona_pgm, **kwargs):
 
 class TestCrearInformeStream:
     def test_returns_sse_events_in_order(self):
+        """Verifies the endpoint formats the output as valid W3C Server-Sent Events."""
         app.dependency_overrides[get_session] = fake_get_session
-        with patch("backend.api.routers.informes.generar_informe_viabilidad_stream", side_effect=eventos_de_prueba):
+        with patch("backend.api.routers.reports.generar_informe_viabilidad_stream", side_effect=eventos_de_prueba):
             client = TestClient(app)
             with client.stream(
-                "POST", "/api/informes/stream", json={"codi_districte": 1, "zona_pgm": "nucli_antic"}
+                "POST", "/api/reports/stream", json={"codi_districte": 1, "zona_pgm": "nucli_antic"}
             ) as response:
                 assert response.status_code == 200
                 assert response.headers["content-type"].startswith("text/event-stream")
@@ -78,32 +92,32 @@ class TestCrearInformeStream:
         assert '"type": "done"' in lineas_datos[2]
 
     def test_regression_session_stays_open_for_the_whole_stream(self):
-        # La propia función eventos_de_prueba ya comprueba esto con un
-        # assert interno en cada yield -- si la sesión se cerrara antes de
-        # tiempo, este test fallaría con el AssertionError de arriba en
-        # vez de completar normalmente.
+        """
+        Regression: Validates that FastAPI's dependency injection does not 
+        close the DB session when the generator yields its first chunk.
+        """
         app.dependency_overrides[get_session] = fake_get_session
-        with patch("backend.api.routers.informes.generar_informe_viabilidad_stream", side_effect=eventos_de_prueba):
+        with patch("backend.api.routers.reports.generar_informe_viabilidad_stream", side_effect=eventos_de_prueba):
             client = TestClient(app)
             with client.stream(
-                "POST", "/api/informes/stream", json={"codi_districte": 1, "zona_pgm": "nucli_antic"}
+                "POST", "/api/reports/stream", json={"codi_districte": 1, "zona_pgm": "nucli_antic"}
             ) as response:
                 list(response.iter_text())  # consume el stream completo
         app.dependency_overrides.clear()
 
     def test_regression_decimal_fields_from_postgres_are_serializable(self):
-        # Bug real: json.dumps no sabe serializar Decimal por defecto.
-        # datos_distrito trae Decimal para los campos numéricos (viene
-        # directo de Postgres, sin pasar por un esquema Pydantic que
-        # los convierta a float) -- sin el 'default' en json.dumps, esto
-        # revienta con TypeError a mitad del streaming.
+        """
+        Regression: Proves that the custom `_json_default` serializer in the 
+        router successfully intercepts `Decimal` objects and casts them to floats 
+        before `json.dumps` throws a TypeError.
+        """
         app.dependency_overrides[get_session] = fake_get_session
         with patch(
-            "backend.api.routers.informes.generar_informe_viabilidad_stream", side_effect=eventos_con_decimal_real
+            "backend.api.routers.reports.generar_informe_viabilidad_stream", side_effect=eventos_con_decimal_real
         ):
             client = TestClient(app)
             with client.stream(
-                "POST", "/api/informes/stream", json={"codi_districte": 1, "zona_pgm": "nucli_antic"}
+                "POST", "/api/reports/stream", json={"codi_districte": 1, "zona_pgm": "nucli_antic"}
             ) as response:
                 assert response.status_code == 200
                 cuerpo = "".join(response.iter_text())

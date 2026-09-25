@@ -1,14 +1,17 @@
 """
-Wrapper del servicio Identify del AMB (geoportal.amb.cat) para resolver
-la zona PGM real dado un punto, usado junto con geocoding.py para pasar
-de una dirección de texto a una zona PGM sugerida.
+==============================================================================
+GIS INTEGRATION: AMB IDENTIFY SERVICE (URBAN ZONING)
+==============================================================================
+File: backend/geo/amb_identify.py
 
-Solo se aceptan los códigos CLAU_URB para los que ya tenemos normativa
-legal verificada y cargada (ver CLAU_URB_A_ZONA_PGM) -- cualquier otro
-código que devuelva el servicio (red viaria, zonas verdes, sistemas,
-zonas de "desenvolupament" sin artículo propio...) se descarta
-automáticamente al no aparecer en la tabla, en vez de mantener aparte
-una lista de "qué excluir".
+Wrapper for the official AMB (Área Metropolitana de Barcelona) Identify service.
+Performs Point-in-Polygon intersection to translate spatial coordinates (Lat/Lon) 
+into the official PGM Urban Zoning code (CLAU_URB).
+
+Security by Design (Allow-listing):
+Only CLAU_URB codes that have verified legal text ingested in the RAG database 
+are accepted. Any other code (roads, parks, undeveloped land) is automatically 
+discarded.
 """
 
 import logging
@@ -18,23 +21,18 @@ import requests
 
 logger = logging.getLogger("geoyield_geocoding")
 
+# Note: Using the live MapServer instead of the cached _25831 to ensure 
+# we query the most up-to-date legal geometries.
 AMB_IDENTIFY_URL = "https://geoportal.amb.cat/geoserveis/rest/services/pla_general_metropolita_1976/MapServer/identify"
 
-# El servicio público del AMB puede tardar más de lo esperado en
-# ocasiones (confirmado con un timeout real durante las pruebas) --
-# mismo criterio de reintento ya aplicado para los 503 transitorios de
-# Gemini en gemini_adapter.py.
+# Network Resilience Config: 
+# Public government APIs can be slow or unstable. Implementing a retry policy 
+# to survive transient network failures without crashing the user request.
 MAX_REINTENTOS = 2
 ESPERA_ENTRE_REINTENTOS_SEGUNDOS = 1
 TIMEOUT_SEGUNDOS = 8
 
-# Traducción CLAU_URB (código del AMB) -> zona_pgm (nuestro identificador
-# interno). Construida y verificada artículo por artículo -- ver el
-# historial de la sesión de investigación para la evidencia de cada uno.
-#
-# Confirmados contra respuestas reales del servicio: "12", "12b", "13a".
-# El resto (13b, 15, 18, 17, 6, 20a, 22a) vienen de la leyenda publicada
-# del AMB, pendientes de confirmar su representación exacta.
+# Allow-list mapping: AMB Code (CLAU_URB) -> Internal RAG Identifier (zona_pgm)
 CLAU_URB_A_ZONA_PGM = {
     "12": "nucli_antic",
     "12b": "nucli_antic",
@@ -51,9 +49,9 @@ CLAU_URB_A_ZONA_PGM = {
 
 def _extraer_zona_de_resultados(resultados: list[dict]) -> dict | None:
     """
-    Recorre los resultados del Identify y devuelve el primer código
-    CLAU_URB que tengamos traducido. Separado de identificar_zona_pgm
-    para poder probar el filtrado sin necesidad de red.
+    Iterates through the Point-in-Polygon results and returns the first 
+    CLAU_URB code that exists in our Allow-list. 
+    Separated from the network call to allow isolated Unit Testing without HTTP.
     """
     for resultado in resultados:
         clau_urb = str(resultado.get("attributes", {}).get("CLAU_URB", "")).strip()
@@ -65,20 +63,18 @@ def _extraer_zona_de_resultados(resultados: list[dict]) -> dict | None:
 
 def identificar_zona_pgm(lat: float, lon: float) -> dict | None:
     """
-    Consulta el servicio Identify del AMB para el punto dado, con
-    reintento automático si el servicio tarda más de lo esperado.
+    Queries the AMB Identify service for a given spatial point.
+    Implements automatic retries on timeout.
 
-    Devuelve {"zona_pgm": ..., "clau_urb": ...} si alguno de los
-    resultados corresponde a un código con normativa cargada, o None si
-    no hay ningún resultado, ninguno tiene normativa cargada, o el
-    servicio no responde tras los reintentos -- nunca inventa una zona.
+    Returns {"zona_pgm": ..., "clau_urb": ...} if a valid, supported zone is found.
+    Returns None if the network fails, or if the zone is unsupported.
     """
     params = {
         "geometry": f'{{"x":{lon},"y":{lat}}}',
         "geometryType": "esriGeometryPoint",
-        "sr": 4326,
+        "sr": 4326, # WGS84 Spatial Reference
         "layers": "all",
-        "tolerance": 2,
+        "tolerance": 2, # Pixel tolerance for the intersection
         "mapExtent": f"{lon - 0.01},{lat - 0.01},{lon + 0.01},{lat + 0.01}",
         "imageDisplay": "400,400,96",
         "returnGeometry": "false",

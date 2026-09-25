@@ -1,11 +1,24 @@
 /**
- * URL base de la API. Se obtiene de las variables de entorno de Vite.
+ * ==============================================================================
+ * API GATEWAY & NETWORK SERVICE LAYER
+ * ==============================================================================
+ * File: frontend/src/services/api.js
+ * 
+ * Abstracts all HTTP communication with the FastAPI Backend. 
+ * Implements centralized error handling and manual Server-Sent Events (SSE) 
+ * parsing for AI LLM Streaming.
+ */
+
+/**
+* Base API URL derived from Vite's environment variables.
  * @constant {string}
  */
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
 /**
- * Procesa la respuesta de Fetch, parseando el JSON o lanzando un error detallado.
+ * Centralized Error Handler.
+ * Intercepts failed HTTP responses, attempts to parse FastAPI's specific 
+ * `detail` field, and throws a normalized JavaScript Error for the UI to catch.
  */
 async function handleResponse(response) {
   if (!response.ok) {
@@ -16,27 +29,21 @@ async function handleResponse(response) {
   return response.json()
 }
 
-/**
- * Obtiene la lista de distritos disponibles.
- */
+/** Fetches available districts. */
 export async function obtenerDistritos() {
-  const response = await fetch(`${API_BASE_URL}/api/distritos`)
+  const response = await fetch(`${API_BASE_URL}/api/districts`)
   return handleResponse(response)
 }
 
-/**
- * Obtiene las zonas urbanísticas PGM.
- */
+/** Fetches urban zoning classifications (Claus PGM). */
 export async function obtenerZonasPgm() {
-  const response = await fetch(`${API_BASE_URL}/api/zonas-pgm`)
+  const response = await fetch(`${API_BASE_URL}/api/pgm-zones`)
   return handleResponse(response)
 }
 
-/**
- * Genera un informe de forma síncrona (completo de una vez).
- */
+/** Generates a synchronous AI report (blocks until the full JSON is ready). */
 export async function generarInforme(codiDistricte, zonaPgm) {
-  const response = await fetch(`${API_BASE_URL}/api/informes`, {
+  const response = await fetch(`${API_BASE_URL}/api/reports`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ codi_districte: codiDistricte, zona_pgm: zonaPgm }),
@@ -44,31 +51,26 @@ export async function generarInforme(codiDistricte, zonaPgm) {
   return handleResponse(response)
 }
 
-/**
- * Obtiene el texto completo de un artículo legal.
- */
+/** Retrieves the full text of a specific legal article for verification. */
 export async function obtenerArticulo(fuenteLegal, numeroArticulo) {
   const params = new URLSearchParams({ fuente_legal: fuenteLegal, numero_articulo: numeroArticulo })
-  const response = await fetch(`${API_BASE_URL}/api/articulos?${params}`)
+  const response = await fetch(`${API_BASE_URL}/api/articles?${params}`)
   return handleResponse(response)
 }
 
 /**
- * Geocodifica una dirección de texto libre -- devuelve distrito y zona
- * PGM sugeridos, cuando se pueden determinar. Lanza un error (que
- * handleResponse convierte en Error con el detail del backend) si la
- * dirección no se encuentra dentro de Barcelona.
+ * Geocodes a free-text address. Throws a normalized error (via handleResponse) 
+ * if the address falls outside the limits of Barcelona.
  */
 export async function geocodificarDireccion(direccion) {
   const params = new URLSearchParams({ direccion })
-  const response = await fetch(`${API_BASE_URL}/api/geocodificar?${params}`)
+  const response = await fetch(`${API_BASE_URL}/api/geocode?${params}`)
   return handleResponse(response)
 }
 
 /**
- * Obtiene la lista de competidores en un distrito. Si se pasa ubicacion
- * ({lat, lon}), busca por radio alrededor de ese punto exacto en vez de
- * todo el distrito.
+ * Fetches commercial competitors. If coordinates {lat, lon} are provided, 
+ * performs a geospatial radius search instead of a district-wide search.
  */
 export async function obtenerCompetidores(codiDistricte, ubicacion = null) {
   const params = new URLSearchParams({ codi_districte: codiDistricte })
@@ -76,23 +78,22 @@ export async function obtenerCompetidores(codiDistricte, ubicacion = null) {
     params.set('lat', ubicacion.lat)
     params.set('lon', ubicacion.lon)
   }
-  const response = await fetch(`${API_BASE_URL}/api/competidores?${params}`)
+  const response = await fetch(`${API_BASE_URL}/api/competitors?${params}`)
   return handleResponse(response)
 }
 
 /**
- * Consume el endpoint de informes mediante Server-Sent Events (streaming).
- *
- * Atrapa sus propios errores (red, HTTP, o un bloque SSE mal formado) y los
- * reporta vía el callback onError, en vez de dejarlos propagar hacia quien
- * llama -- así un solo fragmento corrupto del streaming no aborta todo lo
- * demás, solo se registra un aviso y continúa con el resto.
+ * LLM Streaming Engine (Server-Sent Events via POST).
+ * 
+ * Note: Browsers' native EventSource API only supports GET requests. Because 
+ * we must send a complex JSON payload (POST), we manually consume the network 
+ * byte stream using the Fetch API's Response Reader.
  */
 export async function generarInformeStream(codiDistricte, zonaPgm, callbacks = {}) {
   const { onDatos, onToken, onDone, onError } = callbacks
 
   try {
-    const response = await fetch(`${API_BASE_URL}/api/informes/stream`, {
+    const response = await fetch(`${API_BASE_URL}/api/reports/stream`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ codi_districte: codiDistricte, zona_pgm: zonaPgm }),
@@ -114,7 +115,8 @@ export async function generarInformeStream(codiDistricte, zonaPgm, callbacks = {
       buffer += decoder.decode(value, { stream: true })
       const bloques = buffer.split('\n\n')
 
-      // Conservamos el último fragmento si está incompleto
+      // Network Chunking Safety: Keep the last fragment if it's incomplete 
+      // to avoid breaking JSON.parse on the next iteration.
       buffer = bloques.pop() ?? ''
 
       for (const bloque of bloques) {
@@ -137,14 +139,10 @@ export async function generarInformeStream(codiDistricte, zonaPgm, callbacks = {
 }
 
 /**
- * Consume el endpoint del chat conversacional mediante Server-Sent Events.
- *
- * Además de los eventos habituales (datos/token/done/error), maneja dos
- * propios de este flujo: 'aclaracion' (no se pudo resolver dirección,
- * distrito o zona con confianza -- trae lo que sí se resolvió, para
- * prellenar el formulario manual) y 'ubicacion' (todo resuelto, se
- * informa antes de empezar a transmitir el informe, para centrar el
- * mapa de inmediato).
+ * Conversational AI Streaming Engine.
+ * 
+ * Handles conversational specific events like 'aclaracion' (geocoding failed, 
+ * asking user for input) and 'ubicacion' (geocoding succeeded, centering the map).
  */
 export async function chatInformeStream(mensaje, callbacks = {}) {
   const { onAclaracion, onUbicacion, onDatos, onToken, onDone, onError } = callbacks

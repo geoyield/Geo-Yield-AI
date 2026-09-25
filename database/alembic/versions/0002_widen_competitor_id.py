@@ -1,13 +1,19 @@
-"""widen competitors.id_global to varchar(64)
-
+"""
+==============================================================================
+MIGRACIÓN 0002: RESIZE COLUMNA ID (FASE 1)
+==============================================================================
 Revision ID: 0002
 Revises: 0001
 Create Date: 2026-08-09
 
-El dataset real de Open Data BCN contiene valores de ID_Global de más de
-36 caracteres (el largo estándar de un UUID) — detectado en una carga real
-contra datos de producción, no en las pruebas con datos sintéticos. Se
-ensancha la columna en vez de truncar o descartar esas filas.
+Esta migración refleja un problema clásico al pasar de entornos de desarrollo 
+(con datos sintéticos) a producción (con Open Data BCN real). 
+
+Inicialmente definimos `id_global` en 36 caracteres asumiendo que siempre 
+sería un UUID estándar. Sin embargo, al lanzar el script ETL contra el censo 
+comercial del ayuntamiento, descubrimos registros con identificadores más largos. 
+En lugar de truncar la información original (lo cual rompería la trazabilidad), 
+la solución fue ensanchar el tipo de dato de la columna.
 """
 
 from typing import Sequence, Union
@@ -32,10 +38,11 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # No se revierte a String(36): si ya se cargaron IDs de más de 36
-    # caracteres, el downgrade truncaría datos reales sin avisar. Revertir
-    # el ancho de columna sin pérdida de datos requeriría antes limpiar o
-    # recortar manualmente las filas afectadas.
+    # Aunque el código para revertir el esquema es correcto, ejecutar este 
+    # downgrade en producción es peligroso. Si ya hemos guardado IDs de 50 
+    # caracteres, revertir la columna a 36 truncará esos datos de forma 
+    # irreversible sin lanzar un error (dependiendo de la configuración de Postgres). 
+    # En un entorno real, habría que limpiar los datos a mano antes de hacer este rollback.
     op.alter_column(
         "competitors",
         "id_global",

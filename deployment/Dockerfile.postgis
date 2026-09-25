@@ -1,16 +1,23 @@
-# Se parte de la imagen oficial de Postgres (no de postgis/postgis) porque
-# necesitamos DOS extensiones -- PostGIS y pgvector -- y ambas están
-# disponibles como paquetes del repositorio PGDG (apt.postgresql.org), que
-# la imagen oficial de postgres ya trae configurado internamente (así es
-# como se instala Postgres a sí misma). Partir de postgis/postgis y añadir
-# pgvector encima introducía una incógnita real: no hay garantía de que esa
-# imagen de terceros deje el repositorio PGDG accesible para instalar más
-# paquetes después. Empezando desde postgres:18 evitamos esa incógnita.
+# ==============================================================================
+# DOCKERFILE CUSTOM PARA BASE DE DATOS (PostgreSQL + PostGIS + pgvector)
+# ==============================================================================
+# Para la arquitectura de este proyecto necesitamos un motor híbrido que maneje 
+# tanto geometría (PostGIS) como vectores de Inteligencia Artificial (pgvector).
+# 
+# Decisión de Diseño:
+# En lugar de heredar de la imagen prefabricada de PostGIS (que no incluye pgvector) 
+# y arriesgarnos a problemas de compatibilidad de repositorios, partimos de la 
+# imagen base oficial de PostgreSQL 18. Esta imagen garantiza el acceso nativo 
+# al repositorio oficial PGDG (apt.postgresql.org), permitiéndonos instalar 
+# de forma limpia y controlada ambas extensiones en su versión compatible.
 FROM postgres:18
 
-# Nombres de paquete confirmados contra el propio repositorio PGDG (mismo
-# patrón "postgresql-<version>-<extension>" ya validado en este proyecto
-# con postgresql-16-postgis-3 y postgresql-16-pgvector en fases anteriores).
+# Instalación de dependencias y optimización de la capa (Layer).
+# Se aplican las mejores prácticas de creación de contenedores (Dockerfile Best Practices):
+# 1. Se usa --no-install-recommends para evitar descargar librerías innecesarias.
+# 2. Se encadenan los comandos con '&&' para generar una única capa (layer) en Docker.
+# 3. Se elimina la caché de paquetes de apt (rm -rf...) al finalizar para 
+#    reducir drásticamente el peso del contenedor resultante.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         postgresql-18-postgis-3 \

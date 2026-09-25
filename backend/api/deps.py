@@ -1,12 +1,16 @@
 """
-Gestión del ciclo de vida de la conexión a base de datos y la dependencia
-de sesión para los endpoints.
+==============================================================================
+DATABASE DEPENDENCIES & LIFECYCLE MANAGEMENT
+==============================================================================
+File: backend/api/deps.py
 
-Extraído de api.py a un módulo aparte (sin cambios de lógica) para que los
-routers de dominio (backend/api/routers/*) puedan importar `get_session`
-sin crear un import circular con api.py -- si el router importara
-`get_session` directamente desde api.py, y api.py importara el router
-para registrarlo, cada uno esperaría al otro al cargar.
+Database connection pooling and session creation logic.
+
+Architectural Lesson:
+We extracted this code from the main `api.py` file into a separate module 
+to prevent a "Circular Dependency" issue. If the routers imported the session 
+from `api.py`, and `api.py` in turn imported the routers to register them, 
+the Python interpreter would deadlock, unable to resolve the loading order.
 """
 
 import logging
@@ -20,18 +24,15 @@ from sqlalchemy.orm import sessionmaker
 
 from backend.db.connection import resolve_database_url
 
-# Se carga aquí, a nivel de módulo, para cubrir el caso de correr uvicorn
-# directamente en la máquina (sin pasar por Docker, donde env_file en
-# docker-compose.yml ya inyecta las variables por su cuenta). load_dotenv()
-# no sobreescribe variables ya presentes en el entorno por defecto, así que
-# no interfiere con el caso de Docker.
+# We load the .env variables here in case we are running the API locally 
+# (e.g., executing Uvicorn directly). If we are running inside Docker, 
+# Docker already injects the environment variables, and this line safely does nothing.
 load_dotenv()
 
 logger = logging.getLogger("geoyield_api")
 
-# Estado de aplicación gestionado por el lifespan. Se evita usar variables
-# globales mutables fuera de este patrón para no acoplar el estado a nivel
-# de módulo con la lógica de negocio futura.
+# Global variables to hold the database engine and session factory.
+# Initialized as None so they are only populated when the application actually starts.
 db_engine: Engine | None = None
 SessionLocal: sessionmaker | None = None
 
@@ -39,56 +40,63 @@ SessionLocal: sessionmaker | None = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
-    Ciclo de vida de la aplicación.
+    Application Lifecycle Manager (Context Manager).
+    
+    Controls the execution flow during application startup and shutdown.
 
-    Al arrancar: crea el engine de SQLAlchemy contra Postgres/PostGIS.
-    Se falla rápido (fail-fast) si la variable DATABASE_URL no está definida
-    o la base de datos no es accesible, para no servir tráfico con un estado
-    inconsistente.
+    During startup, we configure the PostgreSQL/PostGIS connection pool. 
+    We perform a 'Fail-Fast' check: if the database is unreachable, we prefer 
+    the application to crash immediately rather than starting in a degraded 
+    state and throwing runtime errors to users later.
     """
     global db_engine, SessionLocal
 
     try:
         database_url = resolve_database_url()
     except RuntimeError:
-        logger.error("DATABASE_URL no está definida en el entorno.")
+        logger.error("Missing DATABASE_URL variable in the .env file")
         raise
 
     try:
-        # pool_pre_ping evita servir conexiones muertas del pool (p. ej. tras
-        # un reinicio de la base de datos) haciendo un ping ligero antes de
-        # reutilizar cada conexión.
+        # Database Engine Creation.
+        # Defensive Programming: We use pool_pre_ping=True so SQLAlchemy 
+        # transparently tests the connection's health before returning it from the pool. 
+        # This is critical if the database service was unexpectedly restarted.
         db_engine = create_engine(database_url, pool_pre_ping=True, future=True)
         SessionLocal = sessionmaker(bind=db_engine, autocommit=False, autoflush=False)
 
-        # Verificación de conectividad real en el arranque, no solo de que
-        # el engine se haya podido instanciar (create_engine es perezoso y
-        # no abre conexión por sí solo).
+        # We execute a trivial SELECT 1 to force SQLAlchemy to establish 
+        # a real TCP connection right now, ensuring everything is properly configured.
         with db_engine.connect() as conn:
             conn.execute(text("SELECT 1"))
-        logger.info("Conexión a la base de datos establecida correctamente.")
+        logger.info("Database connection successfully established.")
 
-    except Exception:
-        logger.exception("Fallo al inicializar la conexión a la base de datos.")
+    except Exception as e:
+        logger.error(f"Failed to connect to the database during startup: {e}")
         raise
 
+    # The application yields control back to the event loop, 
+    # running and serving HTTP requests from this point onwards.
     yield
 
+    # Teardown phase: When the API is stopped (e.g., SIGTERM or Ctrl+C), 
+    # we cleanly dispose of the connection pool to prevent memory leaks.
     if db_engine is not None:
         db_engine.dispose()
-        logger.info("Conexiones a la base de datos cerradas.")
+        logger.info("Database connections safely closed.")
 
 
 def get_session():
     """
-    Crea una sesión de base de datos.
+    Dependency Injection provider for Database Sessions.
 
-    Debe llamarse únicamente después de que el lifespan haya inicializado
-    SessionLocal. Pensada para usarse como dependencia de FastAPI
-    (`Depends(get_session)`) en los endpoints de dominio.
+    Intended to be used as a FastAPI dependency (`Depends(get_session)`). 
+    The try...finally block is a vital safety mechanism: it guarantees that, 
+    no matter what happens during the HTTP request (even if a 500 Server Error occurs), 
+    the connection is always returned to the SQLAlchemy pool.
     """
     if SessionLocal is None:
-        raise RuntimeError("La base de datos no se ha inicializado todavía.")
+        raise RuntimeError("Attempted to request a database session before initialization.")
     session = SessionLocal()
     try:
         yield session

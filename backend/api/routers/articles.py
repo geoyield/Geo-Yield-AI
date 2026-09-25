@@ -1,11 +1,19 @@
 """
-Endpoint para consultar el texto completo de un artículo legal.
+==============================================================================
+API ROUTER: LEGAL ARTICLE RETRIEVAL (UI VIEWER)
+==============================================================================
+File: backend/api/routers/articles.py
 
-El frontend utiliza este endpoint para resolver las citas incluidas
-en los informes de viabilidad.
+Endpoint used by the Vue Frontend to fetch the raw text of a specific legal 
+article. This powers the "Verify Source" side-panel, allowing users to cross-check 
+the LLM's citations against the original law.
 
-La identificación se realiza mediante query params porque `fuente_legal`
-puede contener caracteres como `/`, `(` y `)`.
+Architectural Design Note (Query vs Path Parameters):
+We explicitly use Query Params instead of Path Params here.
+A legal source name often contains slashes or parentheses (e.g., 'Ordre INT/358/2011').
+If we mapped this as a Path Param (`/api/articulos/Ordre INT/358/2011/4`), the 
+HTTP router would break, misinterpreting the slash as a new nested route. 
+Query params (`?fuente_legal=...`) natively handle URL-encoding of special characters.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -13,13 +21,13 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from backend.api.deps import get_session
-from backend.api.schemas.articulos import ArticuloOut
+from backend.api.schemas.articles import ArticuloOut
 
 router = APIRouter(prefix="/api", tags=["articulos"])
 
 
 @router.get(
-    "/articulos",
+    "/articles",
     response_model=ArticuloOut,
     status_code=status.HTTP_200_OK,
     summary="Obtiene el texto completo de un artículo legal",
@@ -29,6 +37,7 @@ router = APIRouter(prefix="/api", tags=["articulos"])
     ),
 )
 def obtener_articulo(
+    # Use FastAPI Query() to enforce presence and add OpenAPI documentation
     fuente_legal: str = Query(
         ...,
         min_length=1,
@@ -50,6 +59,7 @@ def obtener_articulo(
             detail="fuente_legal y numero_articulo no pueden estar vacíos.",
         )
 
+    # We use a raw SQL query here for speed and simplicity, matching the composite key
     row = db.execute(
         text(
             """

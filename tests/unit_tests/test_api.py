@@ -1,10 +1,9 @@
 """
-Tests de los endpoints de FastAPI.
+Tests básicos de la API (FastAPI).
 
-NOTA: /health es liveness puro y no toca la base de datos, así que se puede
-testear sin una instancia de Postgres levantada (útil para CI). /ready sí
-depende de la base de datos y se testeará con una BD real o un mock cuando
-se construya la suite de integración (Fase 1 en adelante).
+El objetivo de este archivo es comprobar que la aplicación arranca bien
+y responde a peticiones sencillas. Es nuestro test para confirmar que 
+el servidor está vivo antes de meternos a probar cosas más complejas.
 """
 
 from fastapi.testclient import TestClient
@@ -12,14 +11,24 @@ from fastapi.testclient import TestClient
 from backend.api.api import app
 
 
-def test_health_returns_ok():
-    # Se usa TestClient SIN "with": entrar como context manager dispara el
-    # lifespan (startup/shutdown) de la app, que intenta conectar a
-    # DATABASE_URL. /health es liveness puro y no debería depender de eso,
-    # así que se testea sin ejecutar el startup — y de paso el test queda
-    # a salvo de necesitar una Postgres real en la CI actual.
+def test_health_returns_ok() -> None:
+    """
+    Comprueba que el endpoint /health devuelve un 200 OK.
+    
+    Nota técnica: 
+    Instanciamos TestClient directamente en lugar de usar un bloque 'with'.
+    Si usáramos 'with TestClient(app)', FastAPI ejecutaría el evento 'lifespan' 
+    (arranque de la app) e intentaría conectarse a la base de datos PostgreSQL. 
+    Como /health solo sirve para comprobar si la API está viva, lo probamos así 
+    para aislar el test. Esto nos permite ejecutarlo rápido en la Integración 
+    Continua (CI) sin necesidad de tener un Docker de Postgres levantado.
+    """
+    # 1. Preparamos el cliente de pruebas
     client = TestClient(app)
+
+    # 2. Hacemos la petición GET al endpoint
     response = client.get("/health")
 
+    # 3. Comprobamos que la respuesta es exactamente la esperada
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}

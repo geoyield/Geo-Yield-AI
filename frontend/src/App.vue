@@ -1,18 +1,30 @@
+<!-- 
+==============================================================================
+ROOT COMPONENT & STATE ORCHESTRATOR
+==============================================================================
+File: frontend/src/App.vue
+
+This is the main Vue component. It manages the global application state 
+(coordinates, active district, streaming status) and distributes it down to 
+its child components (Map, Form, Chat) via props.
+-->
 <script setup>
 import { computed, ref } from 'vue'
-import FormularioViabilidad from './components/FormularioViabilidad.vue'
-import TarjetaVeredicto from './components/TarjetaVeredicto.vue'
-import BurbujaChat from './components/BurbujaChat.vue'
-import MapaDistrito from './components/MapaDistrito.vue'
-import VisorNormativa from './components/VisorNormativa.vue'
+import ViabilityForm from './components/ViabilityForm.vue'
+import VerdictCard from './components/VerdictCard.vue'
+import ChatBubble from './components/ChatBubble.vue'
+import DistrictMap from './components/DistrictMap.vue'
+import RegulationsViewer from './components/RegulationsViewer.vue'
 import { chatInformeStream, generarInformeStream } from './services/api.js'
 
 const SEMAFOROS_VALIDOS = ['verde', 'ambar', 'rojo']
 
+// Global UI State
 const cargando = ref(false)
 const error = ref(null)
 const articuloSeleccionado = ref(null)
 
+// Global Data State
 const codiDistrictePedido = ref(null)
 const ubicacionPedida = ref(null)
 const datosDistrito = ref(null)
@@ -20,14 +32,13 @@ const respuestaLegal = ref('')
 const articulosCitados = ref([])
 const textoSintesis = ref('')
 
-// El backend ya parsea el semáforo con tolerancia a puntuación (ver
-// _parsear_semaforo_y_resumen), pero mientras el texto va llegando en
-// vivo, aquí se hace una detección propia y más simple para revelar el
-// veredicto cuanto antes. Si esa detección en vivo llegara a fallar por
-// cualquier motivo no previsto, semaforoConfirmado (relleno por
-// onDone con el resultado ya parseado del backend) corrige la pantalla
-// en cuanto el streaming termina -- así nunca se queda colgada en
-// "Generando el veredicto" para siempre, pase lo que pase con el texto.
+// ---------------------------------------------------------------------------
+// OPTIMISTIC UI RENDERING (STREAMING TOLERANCE)
+// ---------------------------------------------------------------------------
+// The backend ultimately parses the LLM output robustly. However, to provide 
+// instant UX feedback during streaming, the frontend aggressively guesses the 
+// color from the very first token. If it hallucinates (e.g., "ambar."), the 
+// `semaforoConfirmado` variable will override it once the stream finishes.
 const semaforoConfirmado = ref(null)
 const resumenConfirmado = ref(null)
 
@@ -87,13 +98,13 @@ async function onGenerar({ codiDistricte, zonaPgm, ubicacion }) {
   })
 }
 
-// --- Chat conversacional ---
-// No es un agente: extrae dirección + pregunta específica de la frase
-// libre, y en cuanto resuelve distrito+zona, reutiliza exactamente el
-// mismo pipeline de streaming que el formulario manual. Si no puede
-// resolver todo, entrega lo que sí pudo al formulario (como precarga),
-// que sirve de red de seguridad -- igual que ya hace la búsqueda por
-// dirección de ese mismo formulario.
+// ---------------------------------------------------------------------------
+// CONVERSATIONAL CHAT (GRACEFUL DEGRADATION)
+// ---------------------------------------------------------------------------
+// The AI Agent extracts the address from free-text. If it successfully resolves 
+// it into a District and Zone, it triggers the same pipeline as the manual form.
+// If it fails to resolve completely, it yields what it found to the manual 
+// form as a "pre-fill", acting as a safety net.
 const mensajeChat = ref('')
 const procesandoChat = ref(false)
 const distritoDesdeChat = ref(null)
@@ -196,7 +207,7 @@ async function onEnviarChat() {
       </section>
 
       <section class="mb-8 rounded-xl border border-paper/15 bg-ink-light/50 p-6 shadow-lg backdrop-blur-sm">
-        <FormularioViabilidad
+        <ViabilityForm
           :cargando="cargando"
           :distrito-inicial="distritoDesdeChat"
           :zona-inicial="zonaDesdeChat"
@@ -216,7 +227,7 @@ async function onEnviarChat() {
       </div>
 
       <section v-if="tieneResultados" class="space-y-6 animate-fade-in">
-        <TarjetaVeredicto
+        <VerdictCard
           v-if="semaforo"
           :informe="{ semaforo, resumen, datos_distrito: datosDistrito || {} }"
         />
@@ -226,7 +237,7 @@ async function onEnviarChat() {
         </div>
 
         <div class="grid grid-cols-1 gap-6 md:grid-cols-2">
-          <MapaDistrito
+          <DistrictMap
             v-if="datosDistrito"
             class="h-full min-h-[300px] overflow-hidden rounded-xl border border-paper/15 shadow-sm"
             :codi-districte="codiDistrictePedido"
@@ -234,7 +245,7 @@ async function onEnviarChat() {
             :ubicacion="ubicacionPedida"
           />
 
-          <BurbujaChat
+          <ChatBubble
             v-if="respuestaLegal"
             :informe="{ respuesta_legal: respuestaLegal, articulos_citados: articulosCitados }"
             @ver-articulo="articuloSeleccionado = $event"
@@ -243,7 +254,7 @@ async function onEnviarChat() {
       </section>
     </div>
 
-    <VisorNormativa :articulo="articuloSeleccionado" @cerrar="articuloSeleccionado = null" />
+    <RegulationsViewer :articulo="articuloSeleccionado" @cerrar="articuloSeleccionado = null" />
   </main>
 </template>
 

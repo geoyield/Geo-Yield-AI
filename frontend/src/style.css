@@ -1,5 +1,23 @@
+/**
+ * ==============================================================================
+ * GLOBAL STYLESHEET & DESIGN SYSTEM
+ * ==============================================================================
+ * File: frontend/src/style.css
+ */
+
+/* 
+ * Tailwind CSS v4 Integration:
+ * Replaces the legacy tailwind.config.js file. Vite processes this directly 
+ * and injects the utility classes dynamically.
+ */
 @import "tailwindcss";
 
+/* 
+ * Semantic Design Tokens:
+ * Defining custom CSS variables directly inside Tailwind's @theme directive. 
+ * The nomenclature reflects an "Official Legal Dossier" (Ink, Paper, Brass), 
+ * abandoning generic names to match the business domain.
+ */
 @theme {
   --font-display: "Fraunces", serif;
   --font-body: "IBM Plex Sans", sans-serif;
@@ -10,6 +28,8 @@
   --color-paper: #f5f1e8;
   --color-paper-dim: #e8e2d2;
   --color-brass: #b8863d;
+
+  /* Traffic Light Concept (Viability Indicators) */
   --color-verde: #3f6b4e;
   --color-ambar: #b8863d;
   --color-rojo: #9c4a3c;
@@ -21,8 +41,12 @@ body {
   color: var(--color-paper);
 }
 
-/* Cuadrícula sutil que evoca el plano catastral / la trama del Eixample,
-   como textura de fondo, no como elemento decorativo independiente. */
+/* 
+ * Performant CSS-only Background (WPO):
+ * A subtle grid evoking the "Eixample" urban layout. Calculated entirely via 
+ * mathematical CSS linear gradients. Zero image assets required, saving network 
+ * bandwidth and ensuring crisp scaling on 4K/Retina displays.
+ */
 .fondo-plano {
   background-image:
     linear-gradient(rgba(245, 241, 232, 0.045) 1px, transparent 1px),

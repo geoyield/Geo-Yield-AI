@@ -1,17 +1,29 @@
 """
-Tests de backend/ia/chat_intent.py. Usa un cliente LLM simulado -- sin
-llamadas reales a Gemini.
+==============================================================================
+UNIT TESTS: NLU INTENT EXTRACTION
+==============================================================================
+File: tests/unit_tests/test_chat_intent.py
+
+Tests the `chat_intent.py` logic.
+Uses a custom mock LLM client to simulate API responses (both successful JSON 
+and hallucinations/errors) deterministically, without hitting the real Gemini API.
 """
 
 from backend.ia.chat_intent import extraer_intencion
 
-
+# ----------------------------------------------------------------------------
+# MOCK LLM INFRASTRUCTURE
+# ----------------------------------------------------------------------------
 class FakeResponse:
     def __init__(self, texto):
         self.content = [type("Bloque", (), {"text": texto})()]
 
 
 class FakeLLMClient:
+    """
+    Simulates the LLM API client via Dependency Injection.
+    Allows forcing specific JSON outputs or API exceptions on demand.
+    """
     def __init__(self, texto_respuesta=None, lanza_excepcion=False):
         self.texto_respuesta = texto_respuesta
         self.lanza_excepcion = lanza_excepcion
@@ -22,9 +34,12 @@ class FakeLLMClient:
             raise RuntimeError("fallo simulado del proveedor")
         return FakeResponse(self.texto_respuesta)
 
-
+# ----------------------------------------------------------------------------
+# TEST CASES
+# ----------------------------------------------------------------------------
 class TestExtraerIntencion:
     def test_extracts_direccion_and_pregunta_especifica(self):
+        """HAPPY PATH: Extracts a specific street and a targeted question."""
         client = FakeLLMClient(
             '{"direccion": "Carrer de Sant Pau 1", "distrito_mencionado": null, "pregunta_especifica": "terrazas"}'
         )
@@ -51,11 +66,12 @@ class TestExtraerIntencion:
         assert resultado == {"direccion": None, "distrito_mencionado": None, "pregunta_especifica": None}
 
     def test_regression_extrae_distrito_mencionado_sin_direccion_exacta(self):
-        # Regresión real: un usuario que conoce el distrito pero no da
-        # una calle exacta ("conozco Les Corts, qué me recomiendas ahí")
-        # debe reconocerse como información utilizable, no como "no
-        # identifiqué nada" -- este caso concreto se probó en producción
-        # y fallaba antes de este campo.
+        """
+        REGRESSION TEST (Use Case):
+        A user knows the district but has no specific street ("I know Les Corts...").
+        The system must capture this to allow the Frontend to handle it gracefully,
+        rather than discarding the input entirely.
+        """
         client = FakeLLMClient(
             '{"direccion": null, "distrito_mencionado": "Les Corts", "pregunta_especifica": null}'
         )
@@ -67,8 +83,12 @@ class TestExtraerIntencion:
         assert resultado["distrito_mencionado"] == "Les Corts"
 
     def test_regression_strips_markdown_code_block_wrapper(self):
-        # Regresión: el LLM a veces envuelve el JSON en ```json pese a
-        # que el prompt le pide explícitamente no hacerlo.
+        """
+        REGRESSION TEST (Defensive Parsing):
+        LLMs often wrap JSON in Markdown (```json) despite strict system prompts.
+        This test proves the parser successfully strips the syntax and prevents 
+        a JSONDecodeError.
+        """
         client = FakeLLMClient(
             '```json\n{"direccion": "Gran Via 1", "distrito_mencionado": null, "pregunta_especifica": null}\n```'
         )
@@ -76,14 +96,22 @@ class TestExtraerIntencion:
         assert resultado["direccion"] == "Gran Via 1"
 
     def test_regression_invalid_json_does_not_invent_direccion(self):
-        # Regresión: si el LLM devuelve basura no parseable, no debe
-        # inventarse una dirección para forzar que el flujo continúe --
-        # debe devolver None y dejar que el llamador pida aclaración.
+        """
+        FAIL-SAFE ENFORCEMENT:
+        If the LLM hallucinates unparseable garbage, the system MUST catch the 
+        JSONDecodeError, return None, and ask the user for clarification, rather 
+        than crashing or guessing.
+        """
         client = FakeLLMClient("esto no es JSON en absoluto")
         resultado = extraer_intencion("cualquier mensaje", llm_client=client)
         assert resultado == {"direccion": None, "distrito_mencionado": None, "pregunta_especifica": None}
 
     def test_regression_llm_exception_does_not_crash(self):
+        """
+        NETWORK RESILIENCE:
+        If the LLM provider (Google/Anthropic) goes down, the function must catch 
+        the Exception and return None smoothly.
+        """
         client = FakeLLMClient(lanza_excepcion=True)
         resultado = extraer_intencion("cualquier mensaje", llm_client=client)
         assert resultado == {"direccion": None, "distrito_mencionado": None, "pregunta_especifica": None}

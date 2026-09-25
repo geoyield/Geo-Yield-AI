@@ -1,29 +1,25 @@
 """
-Chunking de normativa legal (Reglament del PGM de Barcelona, portal NUMAMB).
+==============================================================================
+RAG PIPELINE: LEGAL DOCUMENT CHUNKING (PGM BARCELONA)
+==============================================================================
+File: backend/rag/chunking.py
 
-Dos formatos de origen posibles, ambos soportados:
+This module handles the semantic segmentation (chunking) of the Barcelona 
+General Metropolitan Plan (PGM) legal texts extracted from PDFs.
 
-1. Copy-paste de la página web (varios artículos distintos seguidos), donde
-   cada artículo va seguido de un botón "Descarregar".
-2. Exportación a PDF de un único artículo ("Imprimir -> Guardar como PDF"
-   desde el navegador), que NO incluye "Descarregar" (es un botón de UI, no
-   se imprime) y en su lugar trae la metadata (Expedient/Darrera
-   modificació) justo debajo del título. Cada PDF de este tipo apila,
-   además, las distintas VERSIONES HISTÓRICAS del mismo artículo: la
-   consolidada (vigente), la del último expediente de modificación (solo el
-   fragmento que cambió, con "[...]" donde no hubo cambios) y la original
-   de 1985. Solo la vigente nos sirve para el RAG — mezclar las tres
-   arriesga que el motor cite normativa derogada.
-
-   El PDF también añade cabecera/pie de página repetidos en cada hoja
-   (fecha de impresión, título de la web, URL, "página X/Y") que hay que
-   limpiar antes de parsear los artículos.
+Critical Design Constraints:
+Government PDFs append multiple historical versions of the same article 
+(Consolidated, Partial Modification, Original 1985) in a single document. 
+This script implements strict version-control logic to ensure the RAG system 
+only embeds the currently valid (Consolidated) law, preventing the LLM 
+from citing repealed regulations.
 """
 
 import re
 from dataclasses import dataclass
 from enum import Enum
 
+# Regex to capture the Article Number, Qualifier (e.g., 'consolidat'), and Title
 _ARTICLE_HEADER_RE = re.compile(
     r"^Article\s+(?P<numero>\d+[a-z]*)"
     r"(?:\s*\((?P<qualificador>consolidat|modifica(?:ci[oó])?\s*\d*)\)?)?"
@@ -37,18 +33,19 @@ _ARTICLE_REFERENCE_LINE_RE = re.compile(
     r"^Article\s+\d+[a-z]*(?:\s*\([^)]*\)?)?\.\s*.+$"
 )
 
-# Mapeo artículo -> zona PGM (Article 314, Capítol 4: "Qualificacions
-# zonals"). Los artículos de la Secció V (302-313) son la lista canónica y
-# estable de zonas del PGM -- mismo patrón que BARCELONA_DISTRICTS en
-# backend/etl/competitors.py: un hecho del dominio que no cambia, no una
-# configuración. Se amplía según se ingieran más artículos de esa sección;
-# no hace falta anticipar aquí las zonas que todavía no están cargadas.
+# ------------------------------------------------------------------------------
+# DOMAIN KNOWLEDGE MAPPING
+# ------------------------------------------------------------------------------
+# Static mapping of PGM Articles (Section V) to Urban Zones.
+# Similar to the Districts mapping in the ETL phase, these legal zone 
+# definitions are stable facts of the domain, not dynamic configurations.
 ARTICLE_TO_ZONA_PGM = {
     "302": "nucli_antic",
     "303": "densificacio_urbana",
     "311": "industrial",
 }
 
+# Regex patterns to strip useless PDF UI artifacts (headers, footers, URLs)
 _PDF_BOILERPLATE_LINE_RES = [
     re.compile(r"^\d{1,2}/\d{1,2}/\d{2,4},\s*\d{1,2}:\d{2}$"),
     re.compile(r"^Índex normes urbanístiques.*Àrea Metropolitana de Barcelona$"),
@@ -59,6 +56,7 @@ _PDF_BOILERPLATE_LINE_RES = [
 
 
 class VersioArticle(Enum):
+    """Enumeration to track the legal status of an extracted text block."""
     CONSOLIDAT = "consolidat"
     ORIGINAL = "original"
     MODIFICACIO_PARCIAL = "modificacio_parcial"
@@ -66,6 +64,7 @@ class VersioArticle(Enum):
 
 @dataclass
 class LegalChunk:
+    """Data Transfer Object (DTO) for a parsed legal article segment."""
     numero_articulo: str
     titulo: str
     contenido: str
@@ -74,7 +73,11 @@ class LegalChunk:
 
 
 def clean_pdf_text(text: str) -> str:
-    """Quita la cabecera/pie de página repetidos en cada hoja del PDF y el form feed."""
+    """
+    Strips repeating PDF headers, footers, and pagination artifacts.
+    This must be done BEFORE parsing to prevent boilerplate text from 
+    breaking the Regex boundaries or polluting the semantic embeddings.
+    """
     text = text.replace("\f", "\n")
     lines = text.splitlines()
     cleaned = [ln for ln in lines if not any(pat.match(ln.strip()) for pat in _PDF_BOILERPLATE_LINE_RES)]
@@ -84,17 +87,13 @@ def clean_pdf_text(text: str) -> str:
 
 def _find_article_starts(text: str) -> list[tuple[int, re.Match, str]]:
     """
-    Localiza los inicios reales de artículo y reconstruye el título completo.
+    Locates the precise starting index of an article and reconstructs its full title.
 
-    Los títulos largos se parten en varias líneas al extraer el PDF (p. ej.
-    "Article 302 (consolidat. Zona de nucli antic: de substitució de\\n
-    l'edificació antiga..."). Comprobar solo la primera línea siguiente para
-    encontrar el ancla ('Descarregar' o metadata) hacía que estos artículos
-    se descartaran en silencio — grave porque justo eran las versiones
-    CONSOLIDADAS (vigentes) las que tenían títulos largos con qualificador,
-    y el código se quedaba solo con la versión original (desactualizada).
-    Se admite un margen de hasta 3 líneas de continuación del título antes
-    de dar por buena o descartada la coincidencia.
+    Bug Fix Note (Multiline Titles):
+    Long legal titles often break across multiple lines in the PDF. 
+    Initially, checking only the immediate next line caused valid 'Consolidated' 
+    articles to be silently dropped. The logic now tolerates up to 3 continuation 
+    lines to successfully capture long titles without losing the anchor.
     """
     starts = []
     for match in _ARTICLE_HEADER_RE.finditer(text):
@@ -110,7 +109,7 @@ def _find_article_starts(text: str) -> list[tuple[int, re.Match, str]]:
                 break
             continuation_lines.append(stripped)
             if len(continuation_lines) > 3:
-                break  # demasiadas líneas sin ancla: no es un inicio de artículo real
+                break  
     return starts
 
 
@@ -143,6 +142,7 @@ def parse_legal_chunks(text: str) -> list[LegalChunk]:
 
         content_start = meta_match.end() if meta_match else match.end()
         content = block[content_start:]
+        # Remove internal portal boilerplate
         content = content.replace(
             "Text consolidat que incorpora les modificacions dels expedients anteriors", ""
         )
@@ -164,12 +164,13 @@ def parse_legal_chunks(text: str) -> list[LegalChunk]:
 
 def select_current_versions(chunks: list[LegalChunk]) -> list[LegalChunk]:
     """
-    Cuando un mismo artículo aparece varias veces (típico en los PDF, que
-    apilan consolidada + modificación parcial + original), se queda con UNA
-    sola versión por artículo: la consolidada si existe, si no la original.
-    La versión "modificació parcial" NUNCA se selecciona: es un fragmento
-    incompleto (con "[...]" donde no hubo cambios), no un texto legal
-    autocontenido, y además ya está incorporada en la consolidada.
+    Resolves legal versioning conflicts within the parsed document.
+    
+    If the PDF stacked multiple historical versions of the same article, 
+    this function strictly filters out outdated text. It prioritizes the 
+    CONSOLIDATED (currently valid) version. It completely discards Partial 
+    Modifications because they are incomplete text fragments (e.g., missing 
+    paragraphs replaced with '[...]') which would degrade the LLM's context.
     """
     by_article: dict[str, list[LegalChunk]] = {}
     for chunk in chunks:
@@ -179,6 +180,7 @@ def select_current_versions(chunks: list[LegalChunk]) -> list[LegalChunk]:
     for numero, versions in by_article.items():
         consolidat = next((c for c in versions if c.versio == VersioArticle.CONSOLIDAT), None)
         original = next((c for c in versions if c.versio == VersioArticle.ORIGINAL), None)
+        # Fallback to original ONLY if consolidated does not exist
         chosen = consolidat or original
         if chosen is not None:
             selected.append(chosen)

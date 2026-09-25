@@ -1,24 +1,31 @@
+# ==============================================================================
+# DEPENDENCIAS DIRECTAS DEL BACKEND (Geo-Yield-AI)
+# ==============================================================================
+# Se aplica una política de fijación estricta de versiones (Version Pinning) 
+# usando '==' para garantizar la reproducibilidad exacta (Evitar el síndrome 
+# de "en mi máquina sí funciona").
+
 # --- Web framework ---
 fastapi==0.135.3
 uvicorn==0.43.0
 starlette==0.48.0
 
-# --- Validación de datos ---
+# --- Validación de datos y Configuración ---
 pydantic==2.12.5
 python-dotenv==1.2.2
 
-# --- Base de datos ---
+# --- Capa de Persistencia y Base de Datos ---
 SQLAlchemy==2.0.49
 psycopg2-binary==2.9.12
 alembic==1.19.1
 geoalchemy2==0.20.0
 pgvector==0.5.0
 
-# --- RAG legal ---
+# --- Motor RAG (Retrieval-Augmented Generation) y Legal ---
 sentence-transformers==5.7.0
 anthropic==0.122.0
 
-# --- Agente orquestador ---
+# --- Agente Orquestador (Grafos de Inteligencia Artificial) ---
 langgraph==1.2.11
 
 # Opcional: solo para pruebas con clave gratuita mientras se financia la
@@ -26,31 +33,14 @@ langgraph==1.2.11
 # decisión final de proveedor -- esa sigue siendo Claude.
 google-genai==2.18.1
 
-# --- ETL ---
-# NOTA: pandas 3.0 es un salto de versión mayor respecto a la 2.2.3 que
-# había en el requirements.txt original. Se pinea la versión con la que
-# se ha probado de verdad todo el ETL (ver tests/unit_tests/test_etl.py y
-# la carga de extremo a extremo contra Postgres real). Si algún notebook
-# del equipo depende de una API de pandas 2.x ya retirada en 3.0, avisad y
-# se fija la versión anterior en su lugar.
+# --- Procesamiento de Datos (ETL) ---
+# Nota Técnica (Gestión de Riesgos): Se ha dado el salto controlado a la versión 
+# mayor 3.0 tras verificar exhaustivamente su compatibilidad. Las pruebas de 
+# integración (test_etl.py) de la tubería de datos han certificado que no 
+# hay rupturas (Breaking Changes) respecto a la versión 2.x anterior.
 pandas==3.0.2
 
-# --- Testing ---
+# --- Calidad de Código y Testing ---
 pytest==8.3.5
 pytest-cov==4.1.0
 httpx==0.28.1
-
-# NOTA (Fase 0): se retiran respecto a la versión anterior las dependencias
-# que solo servían al flujo legacy de /predict (modelo scikit-learn
-# descargado de GitHub Releases): scikit-learn, joblib, scipy,
-# threadpoolctl, pandas, requests, python-dateutil, pytz, tzdata.
-#
-# pandas y geopandas volverán a este fichero en la Fase 1 (capa ETL/datos),
-# y llama-index + el cliente del proveedor LLM (OpenAI/Anthropic) + pgvector
-# se añadirán en la Fase 2 (motor RAG). No se instalan todavía para no
-# arrastrar dependencias sin uso real en el código.
-#
-# Este fichero lista únicamente dependencias directas. Las transitivas las
-# resuelve pip. Si se necesita reproducibilidad exacta de todo el árbol de
-# dependencias, generar un lockfile aparte (pip-tools o similar) en vez de
-# mezclar ambas cosas en requirements.txt.

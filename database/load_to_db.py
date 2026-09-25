@@ -1,19 +1,24 @@
 """
-Orquestador de carga: ejecuta el ETL (backend/etl/) y escribe
-el resultado en Postgres/PostGIS.
+==============================================================================
+ORQUESTADOR DE CARGA ETL (FASE 1)
+==============================================================================
+Este script actúa como controlador central del pipeline de datos. Extrae los 
+archivos brutos (CSV/Excel), aplica las transformaciones de la capa ETL 
+(backend/etl/) y materializa los DataFrames resultantes en PostgreSQL/PostGIS.
 
 Uso:
     python -m database.load_to_db
 
-Estrategia de carga (snapshot único, decisión validada con el usuario):
-    - districts / neighborhoods: upsert (INSERT ... ON CONFLICT DO UPDATE),
-      ya que son tablas de dimensión que rara vez cambian.
-    - district_income / district_mobility: upsert por codi_districte — cada
-      ejecución sobrescribe el valor anterior en vez de acumular histórico.
-    - competitors: reemplazo transaccional completo (DELETE + INSERT). Los
-      negocios abren y cierran, así que un upsert por id_global dejaría
-      "fantasmas" de locales que ya no existen; un reemplazo completo es
-      más correcto para este caso que un upsert selectivo.
+Estrategias de carga híbridas implementadas:
+    1. Tablas de dimensión (districts, neighborhoods, income, mobility):
+       Se utiliza una estrategia de "Upsert" (INSERT ... ON CONFLICT DO UPDATE).
+       Esto permite actualizar valores (ej. un nuevo dato de renta) sin duplicar 
+       filas ni borrar la estructura de la base de datos.
+    2. Tabla de Censo Comercial (competitors):
+       Se utiliza un reemplazo transaccional completo (DELETE + INSERT). 
+       Dado que los negocios abren y cierran, un Upsert mantendría negocios 
+       "fantasma" que ya no existen en el censo real. El borrado completo 
+       garantiza la integridad absoluta con la última foto del ayuntamiento.
 """
 
 import logging
@@ -38,13 +43,18 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 
 
 def _upsert_dataframe(session: Session, model, df: pd.DataFrame, pk_column: str) -> None:
-    """Upsert genérico: inserta o actualiza fila a fila por clave primaria."""
+    """
+    Función de utilidad para realizar un Upsert masivo (Bulk) nativo en PostgreSQL.
+    Traduce un DataFrame de Pandas a una sentencia ON CONFLICT DO UPDATE de SQLAlchemy.
+    """
     if df.empty:
         logger.warning(f"DataFrame vacío para {model.__tablename__}, no se carga nada.")
         return
 
     records = df.to_dict(orient="records")
     stmt = pg_insert(model).values(records)
+
+    # Preparamos el diccionario de columnas a actualizar si hay conflicto de PK
     update_columns = {
         col: getattr(stmt.excluded, col) for col in df.columns if col != pk_column
     }
@@ -54,6 +64,7 @@ def _upsert_dataframe(session: Session, model, df: pd.DataFrame, pk_column: str)
 
 
 def load_dimensions(session: Session, raw_census_df: pd.DataFrame) -> None:
+    """Carga las tablas estáticas (diccionarios geográficos)."""
     districts_df = build_districts(raw_census_df)
     _upsert_dataframe(session, District, districts_df, pk_column="codi_districte")
 
@@ -62,12 +73,16 @@ def load_dimensions(session: Session, raw_census_df: pd.DataFrame) -> None:
 
 
 def load_competitors(session: Session, raw_census_df: pd.DataFrame) -> None:
+    """Carga el censo de locales utilizando reemplazo completo y tipos PostGIS."""
     competitors_df = build_competitors(raw_census_df)
 
+    # 1. Borrado de la foto anterior (Evita negocios fantasma)
     session.query(Competitor).delete()
 
+    # 2. Reconstrucción con parsing espacial nativo (WKTElement)
     records = []
     for row in competitors_df.itertuples(index=False):
+        # Manejo seguro de nulos en foreign keys secundarias
         codi_barri = None if pd.isna(row.codi_barri) else int(row.codi_barri)
         records.append(
             {
@@ -78,6 +93,7 @@ def load_competitors(session: Session, raw_census_df: pd.DataFrame) -> None:
                 "nom_sector_activitat": row.nom_sector_activitat,
                 "codi_barri": codi_barri,
                 "codi_districte": row.codi_districte,
+                # Conversión de coordenas a formato geográfico estándar (SRID 4326)
                 "geom": WKTElement(f"POINT({row.longitud} {row.latitud})", srid=4326),
             }
         )
@@ -88,16 +104,19 @@ def load_competitors(session: Session, raw_census_df: pd.DataFrame) -> None:
 
 
 def load_income(session: Session, path) -> None:
+    """Carga datos de métricas de renta (INE)."""
     income_df = load_district_income(path)
     _upsert_dataframe(session, DistrictIncome, income_df, pk_column="codi_districte")
 
 
 def load_mobility(session: Session, path) -> None:
+    """Carga datos de tráfico peatonal (MITMA)."""
     mobility_df = load_district_mobility(path)
     _upsert_dataframe(session, DistrictMobility, mobility_df, pk_column="codi_districte")
 
 
 def run(engine=None) -> None:
+    """Punto de entrada del Orquestador ETL."""
     load_dotenv()
 
     if engine is None:
@@ -107,9 +126,15 @@ def run(engine=None) -> None:
     logger.info("Cargando censo comercial (dimensiones + competidores)...")
     raw_census_df = read_raw_census(config.PATH_CENSCOMER)
 
+    # El bloque `with` garantiza el manejo de la transacción (Commit o Rollback)
     with Session(engine) as session:
         load_dimensions(session, raw_census_df)
-        session.flush()  # districts/neighborhoods deben existir antes de las FKs de competitors
+
+        # Flush fuerza la escritura en BD sin cerrar la transacción.
+        # Es obligatorio porque 'competitors' necesita que las PKs de 
+        # districts/neighborhoods ya existan para validar sus Foreign Keys.
+        session.flush()  
+
         load_competitors(session, raw_census_df)
 
         logger.info("Cargando renta media por distrito...")
@@ -118,6 +143,7 @@ def run(engine=None) -> None:
         logger.info("Cargando movilidad/afluencia por distrito...")
         load_mobility(session, config.PATH_MITMA_MOBILITY)
 
+        # Si todo el proceso llega hasta aquí sin errores, se consolida la BD.
         session.commit()
 
     logger.info("Carga completada.")

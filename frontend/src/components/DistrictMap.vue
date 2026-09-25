@@ -1,9 +1,23 @@
+<!-- 
+==============================================================================
+GEOSPATIAL VISUALIZATION COMPONENT
+==============================================================================
+File: frontend/src/components/DistrictMap.vue
+
+Renders the interactive map using Vue-Leaflet. Dynamically fetches and plots 
+competitors using client-side clustering for performance optimization.
+-->
 <script setup>
 import { ref, watch } from 'vue'
 import L from 'leaflet'
 
-// leaflet.markercluster depende del L global, no del módulo ESM importado
-// directamente -- ver documentación de vue-leaflet-markercluster.
+// ---------------------------------------------------------------------------
+// LEGACY MODULE BRIDGING
+// ---------------------------------------------------------------------------
+// The 'leaflet.markercluster' plugin predates modern ES Modules and blindly 
+// expects 'L' to exist on the global Window object. In Vite, modules are 
+// scoped tightly. By explicitly injecting 'L' into globalThis, we bridge the 
+// gap and prevent "L is not defined" crashes.
 globalThis.L = L
 
 import 'leaflet/dist/leaflet.css'
@@ -15,13 +29,12 @@ import { obtenerCompetidores } from '../services/api.js'
 const props = defineProps({
   codiDistricte: { type: Number, required: true },
   nomDistricte: { type: String, default: '' },
-  // Si se indica, el mapa centra en este punto exacto y busca
-  // competidores por radio en vez de en todo el distrito.
+  // If provided, triggers a 'Radius Search' instead of a 'District Search'
   ubicacion: { type: Object, default: null }, // { lat, lon } | null
 })
 
-// Centro de Barcelona como valor de respaldo, por si el distrito no tiene
-// competidores cargados todavía (centro sería null).
+// Fallback coordinate to prevent rendering a broken "gray ocean" map 
+// if a district has zero competitors in the database.
 const CENTRO_BARCELONA = [41.3851, 2.1734]
 
 const cargando = ref(false)
@@ -44,8 +57,9 @@ async function cargarCompetidores() {
     totalReal.value = datos.total
     modo.value = datos.modo
     radioMetros.value = datos.radio_metros
-    // Un radio de unos cientos de metros se ve mejor con más zoom que
-    // la vista de distrito completo.
+
+    // UX Polish: A 500m radius search requires a closer zoom (16) than 
+    // a full district overview (14) to be visually useful.
     zoom.value = datos.modo === 'radio' ? 16 : 14
   } catch (err) {
     error.value = 'No se pudieron cargar los competidores del distrito.'
@@ -54,12 +68,14 @@ async function cargarCompetidores() {
   }
 }
 
-// Se recarga tanto si cambia el distrito como si cambia la ubicación
-// exacta (p. ej. el usuario buscó una dirección nueva).
+// Reactively reload data if the user changes the district OR the specific address
 watch(() => [props.codiDistricte, props.ubicacion], cargarCompetidores, { immediate: true, deep: true })
 
-// Icono de cluster propio (latón/papel, acorde a la identidad visual),
-// en vez del verde/amarillo/naranja por defecto del plugin.
+// ---------------------------------------------------------------------------
+// SEMANTIC MAP DESIGN (CSS-IN-JS)
+// ---------------------------------------------------------------------------
+// Overrides the default neon-colored clusters from Leaflet with our custom 
+// Design Tokens (Brass, Ink, Paper) to maintain visual coherence.
 function crearIconoCluster(cluster) {
   const cantidad = cluster.getChildCount()
   return L.divIcon({
@@ -69,8 +85,8 @@ function crearIconoCluster(cluster) {
   })
 }
 
-// Marcador distinto para "tu ubicación" -- un punto rojo con halo, para
-// que no se confunda nunca con los pines azules de los competidores.
+// Custom "You Are Here" marker. Uses semantic Red for high contrast against 
+// the Brass clusters.
 const iconoUbicacion = L.divIcon({
   html: '<div style="width:18px;height:18px;border-radius:9999px;background:#9C4A3C;border:3px solid #F5F1E8;box-shadow:0 0 0 6px rgba(156,74,60,0.25);"></div>',
   className: '',

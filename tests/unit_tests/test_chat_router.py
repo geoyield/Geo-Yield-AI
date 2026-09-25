@@ -1,6 +1,12 @@
 """
-Tests del router de chat (backend/api/routers/chat.py). Usa mocks sobre
-las funciones que orquesta -- sin red real ni llamadas a Gemini.
+==============================================================================
+UNIT TESTS: CONVERSATIONAL ORCHESTRATOR (SSE)
+==============================================================================
+File: tests/unit_tests/test_chat_router.py
+
+Tests the complex State Machine of the Chat Router (`/api/chat/informe/stream`).
+Uses multiple decorators (`@patch`) to mock the NLU intent extractor, the 
+Nominatim Geocoder, the AMB Identify service, and the RAG generator.
 """
 
 from unittest.mock import patch
@@ -12,6 +18,10 @@ from backend.api.deps import get_session
 
 
 def _eventos_de(respuesta_texto: str) -> list[dict]:
+    """
+    Helper function to parse standard Server-Sent Events (SSE) streams.
+    Splits by double newline and extracts the JSON payload after 'data: '.
+    """
     import json
 
     return [json.loads(bloque[6:]) for bloque in respuesta_texto.split("\n\n") if bloque.startswith("data: ")]
@@ -19,12 +29,18 @@ def _eventos_de(respuesta_texto: str) -> list[dict]:
 
 class TestChatInformeStream:
     def setup_method(self):
+        # Override the database session dependency to avoid DB connections during tests
         app.dependency_overrides[get_session] = lambda: object()
 
     def teardown_method(self):
         app.dependency_overrides.clear()
 
     def test_sin_direccion_ni_distrito_pide_aclaracion(self):
+        """
+        NLU FAILURE PATH:
+        If the intent extractor finds no location data, the Router MUST abort 
+        and yield an 'aclaracion' event to trigger the manual UI form.
+        """
         with patch(
             "backend.api.routers.chat.extraer_intencion",
             return_value={"direccion": None, "distrito_mencionado": None, "pregunta_especifica": None},
@@ -38,12 +54,12 @@ class TestChatInformeStream:
         assert "distrito" in eventos[0]["mensaje"]
 
     def test_regression_distrito_mencionado_sin_direccion_resuelve_solo_distrito(self):
-        # Regresión real: "conozco el distrito de Les Corts, qué me
-        # recomiendas" -- no hay dirección exacta, pero sí un distrito
-        # utilizable. No usa ningún mock de resolver_distrito_desde_suburb
-        # -- se llama la función real, para confirmar que el caso
-        # especial de "Les Corts" (donde "Les" es parte del nombre, no
-        # un artículo que sobra) sigue funcionando en esta ruta también.
+        """
+        REGRESSION TEST (Partial Location):
+        "I know the Les Corts district...". No exact street, but usable district.
+        Tests that the Router correctly maps the text to District ID '4' without 
+        crashing, and asks the user to manually select the PGM Zone.
+        """
         with patch(
             "backend.api.routers.chat.extraer_intencion",
             return_value={"direccion": None, "distrito_mencionado": "Les Corts", "pregunta_especifica": None},
@@ -77,10 +93,12 @@ class TestChatInformeStream:
         assert eventos[0]["direccion_buscada"] == "esto no existe"
 
     def test_regression_zona_no_determinada_devuelve_info_parcial(self):
-        # Regresión: cuando la zona no se puede determinar, el mensaje
-        # debe especificar QUÉ falta (zona, no distrito) y devolver todo
-        # lo que sí se resolvió, para que el frontend pueda prellenar el
-        # formulario manual en vez de empezar de cero.
+        """
+        GRACEFUL DEGRADATION TEST:
+        If NLU works and Geocoding works, but AMB Point-in-Polygon fails, 
+        the Router MUST NOT drop the resolved District ID. It must return it 
+        in the 'aclaracion' payload to pre-fill the UI form.
+        """
         with (
             patch(
                 "backend.api.routers.chat.extraer_intencion",
@@ -107,6 +125,12 @@ class TestChatInformeStream:
         assert eventos[0]["zona_pgm"] is None
 
     def test_flujo_completo_emite_ubicacion_y_reenvia_eventos_del_informe(self):
+        """
+        HAPPY PATH (Event Sequence Verification):
+        Simulates the entire RAG pipeline. Mathematically verifies that the Router 
+        yields the GIS 'ubicacion' event BEFORE yielding the AI streaming chunks.
+        """
+        # Mock Generator representing the RAG engine output
         def informe_simulado(session, codi_districte, zona_pgm, pregunta_especifica=None, **kwargs):
             yield {"type": "datos", "datos_distrito": {}, "respuesta_legal": "x", "articulos_citados": []}
             yield {"type": "token", "text": "VERDE"}
@@ -135,6 +159,7 @@ class TestChatInformeStream:
             with client.stream("POST", "/api/chat/informe/stream", json={"mensaje": "abrir en Sant Pau 1, ¿terraza?"}) as r:
                 eventos = _eventos_de("".join(r.iter_text()))
 
+        # Asserts the exact chronological order of the SSE events
         tipos = [e["type"] for e in eventos]
         assert tipos == ["ubicacion", "datos", "token", "done"]
         assert eventos[0]["codi_districte"] == 1
