@@ -1,17 +1,17 @@
 """
-Geocodificación de direcciones de Barcelona: convierte una dirección de
-texto libre en coordenadas y, cuando es posible, en el distrito oficial
-correspondiente -- usando Nominatim (OpenStreetMap), el mismo proveedor
-que ya usamos para las teselas del mapa.
+==============================================================================
+GEOCODING ENGINE (OPENSTREETMAP NOMINATIM)
+==============================================================================
+File: backend/geo/geocoding.py
 
-No resuelve la zona PGM (para eso hace falta el servicio Identify del
-AMB, con sus propias coordenadas) -- solo el distrito, a partir del
-campo 'suburb' que devuelve Nominatim, que en pruebas reales coincide
-con los 10 distritos oficiales de Barcelona.
+Translates a free-text address into spatial coordinates (Lat/Lon) and, when 
+possible, extracts the official Barcelona District code. 
 
-Funciones principales:
-- geocodificar_direccion: llama a Nominatim y devuelve coordenadas + distrito sugerido (o None si no se pudo resolver ninguno).
-- resolver_distrito_desde_suburb: la lógica de emparejamiento en sí, separada para poder probarla sin red.
+Architectural Note (Separation of Concerns):
+This module DOES NOT resolve the PGM Urban Zoning. Urban zoning requires the 
+official AMB Identify service (`amb_identify.py`) using the coordinates generated 
+here. This file relies exclusively on the 'suburb' field returned by Nominatim, 
+which empirical testing confirmed matches Barcelona's 10 official districts.
 """
 
 import re
@@ -24,18 +24,17 @@ logger = get_logger("geo.geocoding")
 
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 
-# Nominatim exige un User-Agent identificable en su política de uso --
-# sin esto, puede bloquear o limitar las peticiones.
+# API Compliance: User-Agent is mandatory to prevent 403 Forbidden errors.
 USER_AGENT = "GeoYieldAI/1.0 (proyecto academico Pontia)"
 
-# Caja delimitadora aproximada de Barcelona ciudad (izquierda, arriba,
-# derecha, abajo), para sesgar los resultados hacia aquí y no confundir
-# una calle homónima de otra ciudad.
+# Geospatial Bounding Box (min_lon, max_lat, max_lon, min_lat).
+# Restricts results to the Barcelona metropolitan area to prevent false positives 
+# (e.g., resolving a street name to another city).
 BARCELONA_VIEWBOX = "2.052,41.469,2.228,41.320"
 
-# Los 10 distritos oficiales, en minúsculas, para comparar sin
-# sensibilidad a mayúsculas. "les corts" se deja tal cual -- ahí "Les"
-# es parte real del nombre, no un artículo que sobra.
+# Official 10 districts mapped to their integer codes.
+# Stored in lowercase for case-insensitive matching. Note that "les corts" 
+# retains the article "les" as it is officially part of the proper noun.
 DISTRITOS_BARCELONA = {
     "ciutat vella": 1,
     "eixample": 2,
@@ -49,39 +48,44 @@ DISTRITOS_BARCELONA = {
     "sant martí": 10,
 }
 
+# Regex to detect and strip Catalan grammatical articles at the start of a string.
 _ARTICULO_INICIAL_RE = re.compile(r"^(l'|la |el |les )")
 
 
 def resolver_distrito_desde_suburb(suburb: str | None) -> int | None:
     """
-    Empareja el campo 'suburb' de Nominatim con uno de los 10 distritos
-    oficiales de Barcelona.
+    Maps Nominatim's 'suburb' field to one of the 10 official Barcelona districts.
 
-    Primero intenta una coincidencia exacta (cubre "Les Corts", donde el
-    artículo es parte real del nombre) y solo si falla, prueba quitando
-    un artículo catalán inicial (cubre "l'Eixample" -> "Eixample").
-    Devuelve None si no hay coincidencia -- no adivina ni aproxima.
+    Lexical Strategy:
+    1. Attempts an EXACT match first (crucial for "Les Corts").
+    2. If it fails, strips the leading Catalan article using Regex and retries 
+       (e.g., "l'Eixample" -> "Eixample").
+    3. Returns None if no match is found (Fail-Safe: no fuzzy guessing).
     """
     if not suburb:
         return None
 
     normalizado = suburb.strip().lower()
+
+    # Attempt 1: Exact Match
     if normalizado in DISTRITOS_BARCELONA:
         return DISTRITOS_BARCELONA[normalizado]
 
+    # Attempt 2: Strip article and retry
     sin_articulo = _ARTICULO_INICIAL_RE.sub("", normalizado)
     return DISTRITOS_BARCELONA.get(sin_articulo)
 
 
 def geocodificar_direccion(direccion: str) -> dict | None:
     """
-    Busca una dirección dentro de Barcelona vía Nominatim.
+    Queries Nominatim for a free-text address within the Barcelona bounding box.
 
-    Devuelve None si no se encontró ningún resultado. Si se encontró,
-    devuelve un diccionario con lat, lon, direccion_encontrada (el
-    display_name completo de Nominatim, para que el usuario confirme
-    que es la dirección correcta) y codi_districte (int, o None si no
-    se pudo determinar el distrito a partir del resultado).
+    Returns a dictionary containing:
+    - lat, lon: Spatial coordinates (float).
+    - direccion_encontrada: The full 'display_name' for UX validation.
+    - codi_districte: The resolved integer district code (or None if unresolvable).
+    
+    Returns None if the network request fails or yields no results.
     """
     params = {
         "q": direccion,
@@ -104,6 +108,8 @@ def geocodificar_direccion(direccion: str) -> dict | None:
 
     resultado = resultados[0]
     address = resultado.get("address", {})
+
+    # Fallback cascade to extract the most relevant localized neighborhood data
     suburb = address.get("city_district") or address.get("suburb") or address.get("borough")
 
     return {

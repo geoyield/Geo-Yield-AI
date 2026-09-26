@@ -1,18 +1,24 @@
 """
-Tests del chunker generalizado de normas generales
-(backend/rag/chunking_general.py).
+==============================================================================
+UNIT TESTS: HEURISTIC NLP CHUNKER (GENERAL LAWS)
+==============================================================================
+File: tests/unit_tests/test_general_chunking.py
 
-Los fixtures son texto real extraído con pdftotext de dos fuentes
-distintas (Ordre INT/358/2011 del DOGC, Ley 1/2004 del BOE), compartidas
-por el usuario -- el mismo parser, sin ninguna bandera de configuración
-por fuente, tiene que resolver ambos formatos correctamente.
+Tests the generalized legal NLP chunker (`backend/rag/general_chunking.py`).
+The fixtures are synthetic texts designed to mimic real PDFs extracted via 
+pdftotext from two different sources (Ordre INT/358/2011 from DOGC, Ley 1/2004 
+from BOE). 
+
+Architectural Goal:
+Prove that a single Regex/Heuristic engine can correctly parse disparate 
+document formats WITHOUT needing a specific configuration flag per institution.
 """
 
-from backend.rag.chunking_general import clean_boilerplate, parse_articulo_general
+from backend.rag.general_chunking import clean_boilerplate, parse_articulo_general
 
 
 class TestParseArticuloGeneralFormatoDogc:
-    """Formato DOGC: 'Artículo N' solo en su línea, título en la línea siguiente."""
+    """Format: Regional DOGC ('Artículo N' on its own line, Title on the next)."""
 
     def test_parses_all_articles_in_sequence(self):
         text = """Artículo 1
@@ -29,9 +35,10 @@ Hora de apertura y hora de inicio
         assert "Esta Orden" not in chunks[1].contenido
 
     def test_regression_does_not_match_inline_article_references(self):
-        # Las referencias en minúscula tipo "el artículo 20 de la Ley..."
-        # dentro de frases corridas no deben confundirse con un encabezado
-        # real (que va con mayúscula y solo en su propia línea).
+        """
+        Regression: Ensure lowercase inline references (e.g., 'en el artículo 20') 
+        are not mistakenly parsed as new section headers.
+        """
         text = """En virtud del artículo 20 de la Ley 11/2009 y del artículo 5.2.g),
 se aprueba lo siguiente:
 ORDENO:
@@ -46,8 +53,10 @@ Contenido real del artículo 1.
         assert "ORDENO" not in chunks[0].contenido
 
     def test_regression_strips_dogc_header_footer_across_page_break(self):
-        # Cabecera/pie repetidos 3+ veces (frecuencia), detectados sin
-        # necesitar conocer de antemano el texto exacto del DOGC.
+        """
+        NLP Frequency Analysis: Header/Footer boilerplate repeated 3+ times 
+        should be automatically detected and stripped without hardcoding the strings.
+        """
         text = """Diari Oicial de la Generalitat de Catalunya
 
 Núm. 6030 – 22.12.2011
@@ -80,7 +89,7 @@ Núm. 6030 – 22.12.2011
 
 
 class TestParseArticuloGeneralFormatoBoe:
-    """Formato BOE: 'Artículo N. Título.' todo en la misma línea, con índice a filtrar."""
+    """Format: National BOE ('Artículo N. Título.' all on the same line)."""
 
     def test_regression_index_entries_are_not_treated_as_articles(self):
         # Regresión real: el índice del BOE usa el MISMO patrón textual
@@ -114,15 +123,11 @@ Contenido real del segundo artículo.
         assert chunks[0].contenido == "1. El horario global en que los comercios podrán desarrollar su actividad."
 
     def test_regression_index_entry_with_title_wrapped_before_dot_leader(self):
-        # Bug real, encontrado al cargar Ley 11/2009 y Ley 22/2010: cuando
-        # el título de una entrada del índice es largo, se parte en 2
-        # líneas ANTES de llegar al relleno de puntos -- comprobar solo la
-        # primera línea (donde no hay puntos todavía) dejaba pasar la
-        # entrada del índice como si fuera un artículo real, con el mismo
-        # número que el artículo real más adelante. Postgres rechazaba la
-        # carga completa por "ON CONFLICT DO UPDATE command cannot affect
-        # row a second time" al intentar insertar dos filas con la misma
-        # clave (fuente_legal, numero_articulo) en el mismo lote.
+        """
+        Regression (Long Titles): If an index title is so long that it wraps to a 
+        second line BEFORE the dot leaders start, the heuristic might miss it. 
+        This caused fatal DB clashes (ON CONFLICT DO UPDATE).
+        """
         text = """ÍNDICE
 Artículo 39. Licencia municipal o autorización de la Generalidad para los establecimientos abiertos al
 público de régimen especial. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
@@ -134,10 +139,7 @@ Contenido real y completo del artículo 39 de verdad.
         assert chunks[0].contenido == "Contenido real y completo del artículo 39 de verdad."
 
     def test_regression_index_entry_with_title_wrapped_three_lines(self):
-        # Mismo bug, un escalón más largo: un título de índice puede
-        # partirse en 3 líneas (no solo 2) antes del relleno de puntos --
-        # encontrado al reintentar la carga de Ley 11/2009 tras el primer
-        # arreglo (que solo cubría hasta 2 líneas de margen).
+        """Same bug, but the title wraps across 3 lines before the dots."""
         text = """ÍNDICE
 Artículo 7. Derechos y obligaciones de los artistas, intérpretes o ejecutantes y demás personal al
 servicio de los establecimientos abiertos al público, de los espectáculos públicos y de las actividades
@@ -150,9 +152,7 @@ Contenido real y completo del artículo 7 de verdad.
         assert chunks[0].contenido == "Contenido real y completo del artículo 7 de verdad."
 
     def test_regression_strips_boe_header_footer_by_frequency(self):
-        # Cabecera/pie del BOE, distinta a la del DOGC -- detectada por
-        # frecuencia (se repite 3+ veces), sin conocer su texto exacto
-        # de antemano.
+        """Proves the frequency analyzer works on BOE text (not just DOGC)."""
         boilerplate = "BOLETÍN OFICIAL DEL ESTADO\nLEGISLACIÓN CONSOLIDADA"
         text = f"""{boilerplate}
 
@@ -175,9 +175,6 @@ Página 3
             assert noise not in chunks[1].contenido
 
     def test_inline_lowercase_article_reference_not_matched(self):
-        # "el artículo 149.1.13.ª de la Constitución" es una referencia
-        # dentro de una frase, en minúscula -- no debe confundirse con un
-        # encabezado real.
         text = """La presente Ley se dicta en el ejercicio de las competencias exclusivas del Estado en
 materia de bases de la ordenación de la actividad económica que le reconoce el artículo
 149.1.13.ª de la Constitución.
@@ -191,13 +188,11 @@ Contenido real.
 
 class TestParseArticuloGeneralNumeracionCompuesta:
     def test_regression_two_part_numbering_treated_as_distinct_articles(self):
-        # Bug real, encontrado al cargar Ley 22/2010 (Código de Consumo de
-        # Cataluña): usa numeración de dos partes tipo "Artículo 111-1",
-        # "Artículo 111-2" -- la expresión regular original solo capturaba
-        # "111" como número, dejando "-1"/"-2" colarse dentro del título.
-        # Resultado: "111-1" y "111-2" (artículos DISTINTOS con contenido
-        # distinto) se trataban como si fueran el mismo "111", chocando en
-        # el INSERT.
+        """
+        Regression: Catalan law uses compound numbering ('Artículo 111-1'). 
+        The regex must capture the full compound number, otherwise '111-1' and 
+        '111-2' will both be extracted as '111', causing a fatal DB overwrite.
+        """
         text = """Artículo 111-1. Objeto y ámbito.
 Contenido del 111-1.
 Artículo 111-2. Definiciones.
@@ -211,13 +206,12 @@ Contenido del 111-2.
 
 class TestDedupeKeepingLongest:
     def test_regression_duplicate_numero_articulo_keeps_longest_content(self):
-        # Red de seguridad: si por cualquier motivo no anticipado (ya se
-        # han visto dos formas distintas: títulos de índice partidos en
-        # varias líneas, y una sub-numeración de cola de documento no
-        # reconocida) dos artículos acaban con el mismo numero_articulo,
-        # debe quedarse con el de contenido más largo -- el genuino -- en
-        # vez de dejar que la carga completa reviente en Postgres con
-        # "ON CONFLICT DO UPDATE command cannot affect row a second time".
+        """
+        Safety Net / Defensive Programming:
+        If parsing fails and extracts the same article twice, the ETL pipeline 
+        must keep the chunk with the longest content (assuming the shorter one 
+        is a spurious index stub). This prevents Postgres Upsert crashes.
+        """
         text = """Artículo 5. Título corto.
 x
 Artículo 5. Título real.
@@ -238,8 +232,11 @@ class TestCleanBoilerplateGenerico:
         assert "gencat.cat" not in clean_boilerplate(text)
 
     def test_does_not_strip_short_real_content_repeated_twice(self):
-        # El umbral es 3+ repeticiones a propósito: una frase real que
-        # por casualidad se repite 2 veces no debe tratarse como ruido.
+        """
+        Threshold Validation: The algorithm strips lines repeated 3+ times. 
+        A line repeated only 2 times must not be stripped, as it might just be 
+        a naturally repeating legal phrase.
+        """
         text = "Sí, se permite.\nOtro contenido.\nSí, se permite.\nMás contenido."
         cleaned = clean_boilerplate(text)
         assert cleaned.count("Sí, se permite.") == 2

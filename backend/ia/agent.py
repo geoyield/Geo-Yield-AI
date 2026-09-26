@@ -1,14 +1,18 @@
 """
-Agente orquestador de viabilidad de locales de hostelería en Barcelona.
+==============================================================================
+AI ORCHESTRATOR: LANGGRAPH AGENT (VIABILITY)
+==============================================================================
+File: backend/ia/agent.py
 
-Combina en un grafo de LangGraph dos fuentes de información en paralelo
-(datos socioeconómicos del distrito y normativa legal aplicable) y las
-sintetiza en un informe final con un veredicto tipo semáforo.
+This module implements a Directed Acyclic Graph (DAG) using LangGraph.
+It acts as the central orchestrator, executing parallel queries to gather 
+both Phase 1 (GIS/Socioeconomic Data) and Phase 2 (Legal RAG) information. 
+Finally, it passes both contexts to the LLM to synthesize a final business verdict.
 """
 
 import re
 from dataclasses import dataclass
-from typing import Any, Callable, Iterator, Literal, TypedDict
+from typing import Any, Callable, Iterator, Literal, NotRequired, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 from sqlalchemy import text
@@ -35,7 +39,7 @@ ZONA_PGM_NOMBRES = {
 
 
 def zonas_pgm_disponibles(session: Session) -> list[str]:
-    """Obtiene la lista de zonas PGM que tienen normativa en la base de datos."""
+    """Dynamically fetches available zones from the database (Phase 2 constraint)."""
     rows = session.execute(
         text("SELECT DISTINCT zona_pgm FROM legal_chunks WHERE zona_pgm IS NOT NULL")
     ).all()
@@ -43,9 +47,13 @@ def zonas_pgm_disponibles(session: Session) -> list[str]:
 
 
 class ViabilityState(TypedDict):
-    """Estado compartido que viaja entre los nodos del grafo de LangGraph."""
+    """
+    Shared State Dictionary.
+    This acts as the memory that travels between the nodes of the LangGraph DAG.
+    """
     codi_districte: int
     zona_pgm: str
+    pregunta_especifica: NotRequired[str | None]
     datos_distrito: dict[str, Any] | None
     respuesta_legal: dict[str, Any] | None
     informe: dict[str, Any] | None
@@ -53,7 +61,7 @@ class ViabilityState(TypedDict):
 
 @dataclass
 class ViabilityReport:
-    """Estructura del informe final de viabilidad generado por el LLM."""
+    """Final LLM Output Structure."""
     semaforo: Semaforo
     resumen: str
     datos_distrito: dict[str, Any]
@@ -61,6 +69,9 @@ class ViabilityReport:
     articulos_citados: list[dict[str, Any]]
 
 
+# ------------------------------------------------------------------------------
+# SYNTHESIS PROMPT (The "LLM as a Judge" Pattern)
+# ------------------------------------------------------------------------------
 SYNTHESIS_SYSTEM_PROMPT = """Eres un consultor de viabilidad para negocios de hostelería (bares, restaurantes) en Barcelona.
 
 Recibes dos bloques de información ya verificados:
@@ -81,25 +92,27 @@ No uses formato Markdown de ningún tipo (nada de **negrita**, encabezados con #
 No inventes información que no esté en los dos bloques que recibes. Si falta algún dato, dilo explícitamente en vez de rellenar el hueco."""
 
 
-def _construir_pregunta_legal(zona_pgm: str) -> str:
-    """Construye la pregunta al motor legal usando el nombre amigable de la zona."""
+def _construir_pregunta_legal(zona_pgm: str, pregunta_especifica: str | None = None) -> str:
+    """Constructs the exact string that will be vectorized for the RAG query."""
     nombre_zona = ZONA_PGM_NOMBRES.get(zona_pgm, zona_pgm)
-    return (
+    pregunta = (
         f"¿Se permite abrir un bar o restaurante (uso comercial/hostelería) "
         f"en una zona de tipo '{nombre_zona}'? ¿Con qué condiciones o límites?"
     )
+    if pregunta_especifica:
+        pregunta += (
+            f" Además, el usuario pregunta específicamente sobre: {pregunta_especifica}. "
+            f"Si el contexto no incluye normativa específica sobre esto, dilo explícitamente "
+            f"en vez de responder con seguridad sobre algo que no está en el contexto."
+        )
+    return pregunta
 
 
 def _construir_mensaje_sintesis(
     datos: dict[str, Any] | None,
     legal: dict[str, Any]
 ) -> tuple[str, list[dict[str, str]]]:
-    """
-    Arma el mensaje que se envía al LLM para la síntesis final.
-
-    Devuelve una tupla con el texto del mensaje y la lista de artículos citados
-    (con número de artículo y fuente legal).
-    """
+    """Compiles the Phase 1 and Phase 2 data into the final prompt for the LLM."""
     if datos is None:
         bloque_datos = "No hay datos socioeconómicos disponibles para este distrito."
     else:
@@ -129,26 +142,23 @@ def _construir_mensaje_sintesis(
 
 def _parsear_semaforo_y_resumen(texto: str) -> tuple[Semaforo, str]:
     """
-    Extrae el semáforo y el resumen del texto de síntesis.
-
-    Si la primera línea no es un semáforo válido, asume 'ambar'.
+    Sanitizes non-deterministic LLM output.
+    LLMs often append trailing punctuation (e.g., 'AMBAR.') despite instructions 
+    not to. We use Regex to strip punctuation before checking against the Enum.
     """
     texto = texto.strip()
     primera_linea, *resto = texto.splitlines() or [""]
-    # El LLM a veces añade puntuación al final de la palabra del
-    # semáforo (p. ej. "AMBAR." en vez de "AMBAR", un hábito natural de
-    # cerrar frases) -- se quita antes de comparar, para no caer en el
-    # fallback por un simple punto de más. Bug real encontrado en producción.
+
+    # Bug Fix: Remove trailing dots, commas, or exclamation points.
     semaforo_texto = re.sub(r"[.!:;,]+$", "", primera_linea.strip().upper())
 
     if semaforo_texto not in ("VERDE", "AMBAR", "ROJO"):
         logger.warning(
-            "El LLM no devolvió un semáforo reconocible en la primera línea: %r",
+            "The LLM failed to return a valid traffic light on line 1: %r",
             primera_linea
         )
         return "ambar", texto
-
-    # Usamos type ignore porque Python no asume estáticamente que semaforo_texto sea un Semaforo válido
+  
     return semaforo_texto.lower(), "\n".join(resto).strip()  # type: ignore
 
 
@@ -158,7 +168,11 @@ def _crear_nodos_paralelos(
     llm_client: Any,
     model: str
 ) -> tuple[Callable[[ViabilityState], dict[str, Any]], Callable[[ViabilityState], dict[str, Any]]]:
-    """Crea las dos funciones de nodo que se ejecutan en paralelo."""
+    """
+    Defines the two parallel nodes of the LangGraph DAG.
+    1. Fetches GIS data.
+    2. Fetches RAG context.
+    """
 
     def datos_socioeconomicos(state: ViabilityState) -> dict[str, Any]:
         with Session(session.get_bind()) as node_session:
@@ -173,7 +187,7 @@ def _crear_nodos_paralelos(
 
         if row is None:
             logger.warning(
-                "No hay datos en district_scorecard para el distrito %s",
+                "No data found in district_scorecard for district %s",
                 state["codi_districte"]
             )
             return {"datos_distrito": None}
@@ -182,7 +196,7 @@ def _crear_nodos_paralelos(
 
     def normativa_legal(state: ViabilityState) -> dict[str, Any]:
         with Session(session.get_bind()) as node_session:
-            pregunta = _construir_pregunta_legal(state["zona_pgm"])
+            pregunta = _construir_pregunta_legal(state["zona_pgm"], state.get("pregunta_especifica"))
             resultado = generate_answer(
                 node_session,
                 pregunta,
@@ -203,10 +217,9 @@ def build_data_gathering_graph(
     model: str = DEFAULT_MODEL,
 ) -> Any:
     """
-    Construye el grafo reducido solo con los nodos de recopilación.
-
-    Se utiliza para la variante de streaming, donde la síntesis final
-    se realiza fuera del grafo principal.
+    Builds a partial LangGraph.
+    Used exclusively for Streaming, where we need the data collection to finish, 
+    but we want to handle the final Synthesis node manually to stream the tokens.
     """
     datos_socioeconomicos, normativa_legal = _crear_nodos_paralelos(
         session, embed_fn, llm_client, model
@@ -216,6 +229,7 @@ def build_data_gathering_graph(
     graph.add_node("datos_socioeconomicos", datos_socioeconomicos)
     graph.add_node("normativa_legal", normativa_legal)
 
+    # Parallel Execution: Both nodes start from START at the same time
     graph.add_edge(START, "datos_socioeconomicos")
     graph.add_edge(START, "normativa_legal")
     graph.add_edge("datos_socioeconomicos", END)
@@ -231,7 +245,7 @@ def build_agent_graph(
     model: str = DEFAULT_MODEL,
     max_tokens: int = 4096,
 ) -> Any:
-    """Construye el grafo completo incluyendo el nodo de síntesis final."""
+    """Builds the full LangGraph, including the final LLM Synthesis node."""
     datos_socioeconomicos, normativa_legal = _crear_nodos_paralelos(
         session, embed_fn, llm_client, model
     )
@@ -270,6 +284,7 @@ def build_agent_graph(
 
     graph.add_edge(START, "datos_socioeconomicos")
     graph.add_edge(START, "normativa_legal")
+    # Synthesis must wait for BOTH parallel nodes to finish
     graph.add_edge("datos_socioeconomicos", "sintesis_final")
     graph.add_edge("normativa_legal", "sintesis_final")
     graph.add_edge("sintesis_final", END)
@@ -285,8 +300,9 @@ def generar_informe_viabilidad(
     llm_client: Any = None,
     model: str = DEFAULT_MODEL,
     max_tokens: int = 4096,
+    pregunta_especifica: str | None = None,
 ) -> dict[str, Any]:
-    """Punto de entrada para generar el informe de viabilidad de forma síncrona."""
+    """Synchronous invocation of the full LangGraph Agent."""
     app = build_agent_graph(
         session,
         embed_fn=embed_fn,
@@ -294,7 +310,9 @@ def generar_informe_viabilidad(
         model=model,
         max_tokens=max_tokens
     )
-    resultado = app.invoke({"codi_districte": codi_districte, "zona_pgm": zona_pgm})
+    resultado = app.invoke(
+        {"codi_districte": codi_districte, "zona_pgm": zona_pgm, "pregunta_especifica": pregunta_especifica}
+    )
     return resultado["informe"]
 
 
@@ -306,24 +324,26 @@ def generar_informe_viabilidad_stream(
     llm_client: Any = None,
     model: str = DEFAULT_MODEL,
     max_tokens: int = 4096,
+    pregunta_especifica: str | None = None,
 ) -> Iterator[dict[str, Any]]:
     """
-    Genera el informe de viabilidad emitiendo fragmentos (chunks) progresivamente.
-
-    Ideal para integraciones con Server-Sent Events (SSE). Genera eventos tipo
-    diccionario listos para ser transmitidos por red.
+    Streaming invocation. Uses the partial graph to gather data quickly, 
+    yields the raw data to the frontend, and then manages the LLM stream manually.
     """
     from backend.rag.gemini_adapter import GeminiAsAnthropicAdapter
 
     grafo = build_data_gathering_graph(
         session, embed_fn=embed_fn, llm_client=llm_client, model=model
     )
-    resultado = grafo.invoke({"codi_districte": codi_districte, "zona_pgm": zona_pgm})
+    resultado = grafo.invoke(
+        {"codi_districte": codi_districte, "zona_pgm": zona_pgm, "pregunta_especifica": pregunta_especifica}
+    )
 
     datos = resultado.get("datos_distrito")
     legal = resultado["respuesta_legal"]
     mensaje, articulos_citados = _construir_mensaje_sintesis(datos, legal)
 
+    # First event: Send the hard data immediately so the UI can draw charts
     yield {
         "type": "datos",
         "datos_distrito": datos or {},
@@ -334,6 +354,7 @@ def generar_informe_viabilidad_stream(
     client = llm_client if llm_client is not None else GeminiAsAnthropicAdapter()
     texto_acumulado = ""
 
+    # Second event loop: Stream the LLM synthesis token by token
     for fragmento in client.messages.create_stream(
         model=model,
         max_tokens=max_tokens,
@@ -343,5 +364,6 @@ def generar_informe_viabilidad_stream(
         texto_acumulado += fragmento
         yield {"type": "token", "text": fragmento}
 
+    # Third event: Close the stream and parse the final traffic light status
     semaforo, resumen = _parsear_semaforo_y_resumen(texto_acumulado)
     yield {"type": "done", "semaforo": semaforo, "resumen": resumen}

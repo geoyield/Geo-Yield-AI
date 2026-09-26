@@ -1,3 +1,17 @@
+"""
+==============================================================================
+API APPLICATION FACTORY
+==============================================================================
+File: backend/api/api.py
+
+This module defines the central instance of the FastAPI application. It acts as
+the main orchestrator that consolidates:
+1. Application Lifecycle Management (Lifespan).
+2. Middlewares (CORS, Observability/Logging).
+3. Modular Routing (Routers) segmented by business domains.
+4. Health check endpoints (Liveness and Readiness probes) for orchestrators like Docker/K8s.
+"""
+
 import logging
 import os
 import time
@@ -18,7 +32,7 @@ from backend.observability import (
 
 from . import deps
 from .metrics.metrics import metrics
-from .routers import articulos, competidores, geocodificacion, informes, logs
+from .routers import articles, chat, competitors, geocoding, logs, reports
 
 # Also configured here, not only in main.py, so `uvicorn backend.api.api:app`
 # is covered. Idempotent.
@@ -26,9 +40,12 @@ configure_logging()
 
 logger = get_logger("api")
 
+# Application Instantiation. We use the 'lifespan' pattern (context manager)
+# recommended by recent FastAPI versions, deprecating the old 'startup'/'shutdown'
+# events. This ensures safe database connection pooling management.
 app = FastAPI(
     title="Geo-Yield-AI API",
-    description="API del agente de viabilidad de locales de hostelería.",
+    description="API for the hospitality premises viability AI agent.",
     lifespan=deps.lifespan,
 )
 
@@ -51,42 +68,62 @@ app.add_middleware(
     expose_headers=["X-Request-ID"],
 )
 
-app.include_router(informes.router)
-app.include_router(competidores.router)
-app.include_router(articulos.router)
-app.include_router(geocodificacion.router)
+# Router Registration. We apply the Modular Architecture principle,
+# separating business logic into distinct domains to facilitate maintainability.
+app.include_router(reports.router)
+app.include_router(competitors.router)
+app.include_router(articles.router)
+app.include_router(geocoding.router)
+app.include_router(chat.router)
 app.include_router(logs.router)
 
 # Probes are called every few seconds; logging them is paid-for noise.
 UNLOGGED_PATHS = frozenset({"/health", "/ready", "/metrics"})
 
 
-@app.get("/health")
-def health():
+@app.get("/health", tags=["Monitoring"])
+def health() -> dict:
     """
-    Liveness probe: confirma que el proceso está arriba.
-    No depende de la base de datos a propósito, para que un contenedor
-    orquestado (Docker/K8s) no lo reinicie en bucle si la BD está caída.
+    Liveness Probe Endpoint.
+
+    Informs the orchestrator (e.g., Docker, Kubernetes) that the web process
+    is running and has not deadlocked.
+
+    Returns:
+        dict: A dictionary with the "ok" status.
+
+    Architectural Note:
+        This endpoint is intentionally agnostic to the database state.
+        If the DB goes down, the container should NOT enter a crash-loop;
+        it must stay alive waiting for the DB to recover.
     """
     return {"status": "ok"}
 
 
-@app.get("/ready")
+@app.get("/ready", tags=["Monitoring"])
 def ready():
     """
-    Readiness probe: confirma que la aplicación puede atender tráfico real,
-    es decir, que la base de datos está accesible.
+    Readiness Probe Endpoint.
 
-    Se accede a `deps.db_engine` (atributo del módulo), no a un valor
-    importado con `from .deps import db_engine`: el lifespan lo asigna en
-    tiempo de ejecución, después de que este módulo ya se haya importado
-    -- un `from ... import db_engine` capturaría el valor `None` que tenía
-    en el momento del import y nunca vería la actualización posterior.
+    Unlike the Liveness probe, this endpoint verifies that the API is fully
+    operational and capable of processing real traffic by checking the active
+    connection to the PostgreSQL database.
+
+    Returns:
+        dict | PlainTextResponse: "ready" status (HTTP 200) if connected,
+        or an error (HTTP 503 Service Unavailable) if the DB is unreachable.
+
+    Python Technical Note:
+        We access the `deps.db_engine` attribute dynamically. Had we used
+        `from .deps import db_engine`, the initial import would have copied
+        the `None` value (by value). By accessing via the module namespace,
+        we guarantee reading the updated pointer managed by the Lifespan context.
     """
     if deps.db_engine is None:
         return PlainTextResponse("database not initialized", status_code=503)
 
     try:
+        # Executes a trivial query to validate TCP communication with the DB.
         with deps.db_engine.connect() as conn:
             conn.execute(text("SELECT 1"))
         return {"status": "ready"}
@@ -95,8 +132,17 @@ def ready():
         return PlainTextResponse("database unreachable", status_code=503)
 
 
-@app.get("/metrics", response_class=PlainTextResponse)
-def metrics_endpoint():
+@app.get("/metrics", response_class=PlainTextResponse, tags=["Monitoring"])
+def metrics_endpoint() -> str:
+    """
+    Application Metrics Endpoint.
+
+    Exposes Key Performance Indicators (KPIs) in plain text format,
+    making them ready to be scraped by external monitoring tools like Prometheus.
+
+    Returns:
+        str: Text string containing the total processed requests.
+    """
     return f'total_requests {metrics["total_requests"]}\n'
 
 

@@ -1,10 +1,18 @@
 """
-Embeddings locales para el motor RAG legal (sentence-transformers, coste
-cero, decisión ya validada con el usuario).
+==============================================================================
+RAG PIPELINE: LOCAL EMBEDDINGS MODEL
+==============================================================================
+File: backend/rag/embeddings.py
 
-El modelo se carga de forma perezosa (solo al primer uso real) y cacheada
-en memoria — evita el coste de cargarlo si el módulo se importa pero no se
-usa (p. ej. en tests que inyectan su propia función de embedding).
+This module handles the mathematical vectorization of legal texts.
+It uses a lightweight, open-source local model (Sentence-Transformers) 
+to embed text into 384-dimensional vectors at zero cost, bypassing the 
+need for paid external APIs (like OpenAI).
+
+Performance Feature:
+The Heavy Machine Learning model (Torch) is loaded lazily and cached in 
+memory. It only consumes RAM upon the first actual usage, preventing slow 
+boot times when other modules import the EMBEDDING_DIM constant.
 """
 
 from typing import Protocol
@@ -12,16 +20,17 @@ from typing import Protocol
 MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 EMBEDDING_DIM = 384
 
+# Singleton cache for the model instance
 _model = None
 
 
 class EmbeddingFunction(Protocol):
     """
-    Contrato que debe cumplir cualquier función de embedding usada por el
-    pipeline de ingesta (ver database/load_legal_corpus.py). Se define como
-    Protocol para poder inyectar una función falsa en los tests sin
-    necesidad de heredar de una clase base — cualquier callable con esta
-    firma vale.
+    Dependency Injection Interface (Protocol).
+    Any function used to embed text (e.g., in `database/load_legal_corpus.py` 
+    or inside Unit Tests) must match this signature. This allows us to inject 
+    a fake/mock embedding function during testing without coupling the tests 
+    to the heavy Hugging Face model.
     """
 
     def __call__(self, texts: list[str]) -> list[list[float]]: ...
@@ -29,10 +38,14 @@ class EmbeddingFunction(Protocol):
 
 def _get_model():
     global _model
+    """
+    Lazy Loader (Singleton Pattern).
+    Loads the Hugging Face model into memory only the first time it is called.
+    """
     if _model is None:
-        # Import perezoso: sentence-transformers es una dependencia pesada
-        # (arrastra torch), no queremos pagar ese coste de import solo por
-        # importar este módulo si al final se usa una función inyectada.
+        # Lazy Import: 'sentence_transformers' drags the massive PyTorch library 
+        # into memory. We do not want to pay this heavy import tax globally, 
+        # especially during Pytest runs that use Mock embedding functions.
         from sentence_transformers import SentenceTransformer
 
         _model = SentenceTransformer(MODEL_NAME)
@@ -41,11 +54,14 @@ def _get_model():
 
 def embed_texts(texts: list[str]) -> list[list[float]]:
     """
-    Implementación real de EmbeddingFunction, usando el modelo local.
+    The concrete implementation of EmbeddingFunction using the local model.
 
-    normalize_embeddings=True: normaliza a norma unitaria, para que la
-    distancia coseno (el operador <=> que usa el índice HNSW de la
-    migración 0003) sea directamente comparable entre vectores.
+    Mathematical Design Note:
+    `normalize_embeddings=True` forces the vectors to have a unit norm (L2).
+    Why? Because mathematically, when vectors are normalized, Cosine Distance 
+    becomes proportional to Inner Product. This allows PostgreSQL (pgvector) 
+    to use the `<=>` operator over the HNSW index, drastically speeding up 
+    the semantic similarity search.
     """
     model = _get_model()
     embeddings = model.encode(texts, normalize_embeddings=True)

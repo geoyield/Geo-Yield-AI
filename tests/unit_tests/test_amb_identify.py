@@ -1,5 +1,12 @@
 """
-Tests de backend/geo/amb_identify.py.
+==============================================================================
+UNIT TESTS: AMB GIS SERVICE WRAPPER
+==============================================================================
+File: tests/unit_tests/test_amb_identify.py
+
+Tests the translation between AMB's raw GIS payloads and internal RAG zoning codes.
+Uses Python's `unittest.mock` to simulate HTTP requests, ensuring the test suite 
+remains deterministic and independent of the external government server's uptime.
 """
 
 from unittest.mock import MagicMock, patch
@@ -8,8 +15,8 @@ import requests
 
 from backend.geo.amb_identify import _extraer_zona_de_resultados, identificar_zona_pgm
 
-# Resultado real devuelto por el servicio Identify del AMB durante la
-# investigación de esta sesión, para el centro de Barcelona (2.1734, 41.3851).
+# Empirical payload returned by the AMB Identify service during the API Spike 
+# session, querying the center of Barcelona (Plaça Catalunya: 2.1734, 41.3851).
 RESULTADOS_REALES_CENTRO_BCN = [
     {"layerId": 1, "attributes": {"CLAU_URB": "5b"}},
     {"layerId": 1, "attributes": {"CLAU_URB": "12b"}},
@@ -22,9 +29,12 @@ RESULTADOS_REALES_CENTRO_BCN = [
 
 class TestExtraerZonaDeResultados:
     def test_regression_real_amb_response_finds_nucli_antic(self):
-        # Regresión: la respuesta real de la investigación traía "5b" y
-        # "5" (red viaria, sin normativa cargada) mezclados con "12b"
-        # (sí tiene) -- debe encontrar 12b e ignorar el resto.
+        """
+        REGRESSION TEST (Noise Filtering):
+        The real AMB response mixes unmapped road network codes ("5b", "5") 
+        with valid urban zones ("12b"). The parser must ignore the unmapped 
+        noise and successfully extract the valid '12b' (nucli_antic).
+        """
         resultado = _extraer_zona_de_resultados(RESULTADOS_REALES_CENTRO_BCN)
         assert resultado == {"zona_pgm": "nucli_antic", "clau_urb": "12b"}
 
@@ -36,8 +46,12 @@ class TestExtraerZonaDeResultados:
         assert _extraer_zona_de_resultados([]) is None
 
     def test_returns_none_for_unmapped_desenvolupament_code(self):
-        # Regresión: un código real del PGM (no inventado) pero sin
-        # normativa cargada -- no debe devolver una zona por error.
+        """
+        ALLOW-LIST ENFORCEMENT:
+        "22b" is a real PGM code, but we haven't ingested its legal text yet.
+        The system MUST return None to prevent the AI from hallucinating rules 
+        for a zone it doesn't know about.
+        """
         resultados = [{"attributes": {"CLAU_URB": "22b"}}]
         assert _extraer_zona_de_resultados(resultados) is None
 
@@ -46,14 +60,20 @@ class TestExtraerZonaDeResultados:
 
 
 class TestIdentificarZonaPgmReintentos:
+    # Applying Decorators to intercept external dependencies
     @patch("backend.geo.amb_identify.time.sleep")
     @patch("backend.geo.amb_identify.requests.get")
     def test_regression_retries_on_timeout_then_succeeds(self, mock_get, mock_sleep):
-        # Regresión: un timeout real ocurrió durante las pruebas de esta
-        # sesión (el servicio público del AMB no siempre responde rápido)
-        # -- debe reintentar en vez de fallar a la primera.
+        """
+        STATE MACHINE VERIFICATION (Resilience):
+        Simulates a transient network failure (Timeout) on the first call, 
+        followed by a successful response on the second call. Proves the retry 
+        loop recovers gracefully.
+        """
         respuesta_ok = MagicMock()
         respuesta_ok.json.return_value = {"results": [{"attributes": {"CLAU_URB": "12b"}}]}
+
+        # side_effect allows us to define a sequence of returns for consecutive calls
         mock_get.side_effect = [requests.exceptions.ReadTimeout("timeout simulado"), respuesta_ok]
 
         resultado = identificar_zona_pgm(41.3851, 2.1734)
@@ -70,4 +90,4 @@ class TestIdentificarZonaPgmReintentos:
         resultado = identificar_zona_pgm(41.3851, 2.1734)
 
         assert resultado is None
-        assert mock_get.call_count == 3  # intento inicial + 2 reintentos
+        assert mock_get.call_count == 3  # Initial attempt + 2 retries

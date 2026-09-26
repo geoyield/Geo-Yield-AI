@@ -1,18 +1,24 @@
 """
-Endpoint que combina geocodificación de direcciones (Nominatim) con
-identificación de zona PGM (servicio Identify del AMB), para sugerir
-distrito y zona a partir de una dirección de texto libre.
+==============================================================================
+API ROUTER: GEOCODING & SPATIAL INTERSECTION
+==============================================================================
+File: backend/api/routers/geocoding.py
 
-Nunca falla del todo si una de las dos fuentes no responde: si Nominatim
-no encuentra la dirección, es un 404 real (no hay nada que sugerir).
-Pero si el AMB no responde o no reconoce la zona, se devuelve igualmente
-el distrito ya resuelto, con zona_pgm=null -- la sugerencia parcial
-sigue siendo útil, no hace falta todo o nada.
+Endpoint that combines free-text geocoding (Nominatim) with spatial intersection
+(AMB Identify Service) to suggest both the District and the PGM Urban Zone.
+
+Graceful Degradation Design:
+The endpoint avoids an "all-or-nothing" failure state.
+- If Nominatim fails to find the address, it raises a hard HTTP 404 (True failure).
+- If Nominatim succeeds but the AMB service fails (or returns an unmapped zone),
+  it returns an HTTP 200 with the District resolved and `zona_pgm=null`. This
+  partial payload allows the frontend to pre-fill half the form instead of
+  crashing entirely.
 """
 
 from fastapi import APIRouter, HTTPException, Query, status
 
-from backend.api.schemas.geocodificacion import GeocodificacionResponse
+from backend.api.schemas.geocoding import GeocodificacionResponse
 from backend.geo.amb_identify import identificar_zona_pgm
 from backend.geo.geocoding import geocodificar_direccion
 from backend.observability import get_logger, log_event
@@ -22,8 +28,9 @@ logger = get_logger("api.geocodificacion")
 router = APIRouter(prefix="/api", tags=["geocodificacion"])
 
 
-@router.get("/geocodificar", response_model=GeocodificacionResponse)
+@router.get("/geocode", response_model=GeocodificacionResponse)
 def geocodificar(direccion: str = Query(..., min_length=3)):
+    # Step 1: Text-to-Coordinates (Nominatim)
     resultado_geo = geocodificar_direccion(direccion)
     if resultado_geo is None:
         # GDPR: the address the user typed is personal data and is never
@@ -35,6 +42,8 @@ def geocodificar(direccion: str = Query(..., min_length=3)):
             detail="No se pudo encontrar esa dirección dentro de Barcelona.",
         )
 
+    # Step 2: Point-in-Polygon (AMB Identify)
+    # This acts as a pipeline, piping the Lat/Lon from Step 1 into Step 2.
     resultado_zona = identificar_zona_pgm(resultado_geo["lat"], resultado_geo["lon"])
     if resultado_zona is None:
         log_event(
@@ -43,6 +52,7 @@ def geocodificar(direccion: str = Query(..., min_length=3)):
             codi_districte=resultado_geo["codi_districte"],
         )
 
+    # Step 3: Payload Construction (Partial Failure Tolerance)
     return GeocodificacionResponse(
         direccion_encontrada=resultado_geo["direccion_encontrada"],
         lat=resultado_geo["lat"],

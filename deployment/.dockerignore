@@ -1,16 +1,39 @@
-__pycache__
-*/__pycache__
-*.pyc
+# ==============================================================================
+# .DOCKERIGNORE
+# ==============================================================================
+# Define qué archivos y carpetas del entorno local NO deben enviarse al 
+# "Build Context" de Docker. Esto mejora la seguridad, reduce el peso de la 
+# imagen y evita conflictos de sistema operativo.
+
+# 1. SEGURIDAD CRÍTICA (¡Nunca copiar secretos al contenedor!)
 .env
+
+# 2. ENTORNO LOCAL Y CACHÉ DE PYTHON
+# Evitamos copiar el entorno virtual local porque las librerías instaladas 
+# en Windows/Mac no funcionan directamente en el Linux del contenedor.
 env/
 .venv/
-doc/
-*.db
+__pycache__/
+*/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 3. ARCHIVOS DE INFRAESTRUCTURA (El contenedor no necesita su propia receta)
 *.yml
 *docker*
 *Dockerfile*
+
+# 4. DATOS LOCALES Y ESTADO
+# No copiamos bases de datos locales, logs de pruebas ni datos pesados.
+# En producción, estos recursos se inyectan mediante Volúmenes de Docker.
+*.db
 logs/
 metrics/
 data/
 models/
+
+# 5. CÓDIGO DE PRUEBAS
+# Los scripts de testeo local no deben engordar la imagen de producción.
 test_api.py
+doc/

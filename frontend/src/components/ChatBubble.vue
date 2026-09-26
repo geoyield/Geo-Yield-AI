@@ -1,3 +1,19 @@
+<!--
+==============================================================================
+UI COMPONENT: AI RESPONSE BUBBLE & CITATIONS
+==============================================================================
+File: frontend/src/components/ChatBubble.vue
+
+Dumb/Presentational Component.
+Receives the AI's legal response via Props and renders the text alongside 
+interactive pill-buttons for each cited legal article.
+
+Architectural Note:
+This component does not manage the state of the PDF Viewer (VisorNormativa).
+It strictly follows "Props Down, Events Up" by emitting the 'ver-articulo' event 
+back to the Orchestrator (App.vue).
+-->
+
 <script setup>
 import { computed } from 'vue'
 
@@ -6,7 +22,10 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['ver-articulo'])
-
+// Defensive Computing (Streaming Data Safety):
+// Since the report arrives via SSE Streaming, the 'articulos_citados' array 
+// might be undefined during the first few chunks. Directly checking .length 
+// would crash the Vue Virtual DOM.
 const tieneArticulos = computed(() => {
   return Array.isArray(props.informe.articulos_citados) && props.informe.articulos_citados.length > 0
 })
@@ -14,6 +33,7 @@ const tieneArticulos = computed(() => {
 
 <template>
   <div class="flex gap-4">
+    <!-- Chat Avatar -->
     <div
       class="mt-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-brass/40 bg-ink text-brass shadow-sm font-display text-sm"
       aria-hidden="true"
@@ -21,6 +41,7 @@ const tieneArticulos = computed(() => {
       GY
     </div>
 
+    <!-- Message Bubble -->
     <div class="flex-1 space-y-4 rounded-2xl rounded-tl-sm border border-paper/10 bg-ink-light px-5 py-4 shadow-sm">
       <header>
         <p class="mb-1.5 font-mono text-[10px] font-semibold tracking-widest text-brass uppercase">
@@ -31,6 +52,7 @@ const tieneArticulos = computed(() => {
         </p>
       </header>
 
+      <!-- Citations Section (RAG Traceability) -->
       <footer v-if="tieneArticulos" class="flex flex-wrap gap-2 border-t border-paper/10 pt-4">
         <button
           v-for="articulo in informe.articulos_citados"

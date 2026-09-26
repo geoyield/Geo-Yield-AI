@@ -1,9 +1,14 @@
 """
-ETL de afluencia peatonal diaria por distrito (fuente: MITMA).
+==============================================================================
+ETL PIPELINE: DISTRICT MOBILITY / FOOT TRAFFIC (MITMA)
+==============================================================================
+File: backend/etl/mobility.py
 
-Consolida la lógica del notebook `01_eda_mobility_mitma.ipynb`. El dataset
-crudo de MITMA cubre toda España; se filtra a los desplazamientos con
-destino en Barcelona y se agregan los viajes por distrito de destino.
+This module extracts and transforms massive mobile tracking data from MITMA 
+(Ministry of Transport). It processes nationwide data to calculate the exact 
+daily foot traffic (`daily_foot_traffic`) arriving at each Barcelona district.
+
+Consolidates the logic from `notebooks/01_eda_mobility_mitma.ipynb`.
 """
 
 import pandas as pd
@@ -13,62 +18,65 @@ from .config import BARCELONA_MUNICIPIO_CODE
 
 def read_raw_mobility(path) -> pd.DataFrame:
     """
-    Lee el CSV crudo de movilidad de MITMA tal cual se descarga.
+    Reads the raw MITMA mobility CSV file.
 
-    sep="|" es intencionado: MITMA distribuye este fichero con separador
-    pipe, no coma (confirmado contra el fichero real
-    20251015_Viajes_distritos.csv.gz). pandas.read_csv detecta la
-    compresión gzip automáticamente por la extensión .gz, sin parámetros
-    adicionales.
-
-    dtype={"destino": str, "origen": str} es intencionado y crítico: sin
-    esto, pandas infiere estas columnas como int64 y PIERDE EL CERO INICIAL
-    de los códigos de zona ("0801901" se lee como el entero 801901). El
-    filtro de prefijo "08019" para Barcelona nunca coincide con un código
-    que ya perdió su cero inicial. Mismo patrón de bug que en income.py con
-    el separador de miles.
+    Data Engineering Note (Silent Bug Prevention):
+    The `sep="|"` is intentional, as MITMA uses pipes instead of commas.
+    Pandas automatically handles the .gz compression.
+    
+    CRITICAL: `dtype={"destino": str, "origen": str}` prevents the "Lost Zero" bug. 
+    INE zone codes often start with zero (e.g., "0801901" for District 1). 
+    If Pandas infers this as an `int64`, it silently drops the leading zero 
+    (becoming 801901). Later on, when we try to filter for strings starting 
+    with "08019", the filter fails completely, returning an empty table. 
+    Forcing `str` parsing protects the data integrity.
     """
     return pd.read_csv(path, sep="|", dtype={"destino": str, "origen": str})
 
 
 def build_district_mobility(raw_df: pd.DataFrame) -> pd.DataFrame:
     """
-    Transforma el CSV crudo de MITMA en afluencia diaria por distrito.
+    Transforms the raw MITMA Big Data into a simple district-level summary.
 
-    El código de zona de destino de MITMA para Barcelona sigue el patrón
-    "08" (provincia) + "019" (municipio) + "NN" (distrito, 01-10), p. ej.
-    "0801901" para el distrito 1 (Ciutat Vella). Se filtra por ese prefijo
-    y se extraen los 2 últimos caracteres como número de distrito.
-
-    Devuelve columnas: codi_districte, daily_foot_traffic, fecha.
+    Transformation Rules:
+        1. The destination code format is "08" (Province) + "019" (Municipality) 
+           + "NN" (District 01-10). Example: "0801901".
+        2. We filter the nationwide dataset to keep ONLY rows where the 
+           destination starts with "08019".
+        3. We extract the last two characters to get the `codi_districte`.
+        4. Group by district and sum the total trips to get foot traffic.
     """
     df = raw_df.copy()
     df["destino"] = df["destino"].astype(str)
 
+    # 1. Geographic Filtering: Keep only trips arriving in Barcelona  
     is_barcelona = df["destino"].str.startswith(BARCELONA_MUNICIPIO_CODE)
     df = df[is_barcelona].copy()
 
+    # Fail-Fast mechanism: Do not proceed silently if the filter fails.
     if df.empty:
         raise ValueError(
-            "No se encontraron desplazamientos con destino en Barcelona. "
-            f"Se esperaba que 'destino' empezara por '{BARCELONA_MUNICIPIO_CODE}'; "
-            "revisa el formato del CSV de origen de MITMA."
+            "No mobility trips found ending in Barcelona."
+            f"Expected 'destino' to start with '{BARCELONA_MUNICIPIO_CODE}'; "
+            "Verify the source CSV format and its leading zeros."
         )
 
+    # 2. Extract District ID (e.g., from "0801901" to 1)
     df["codi_districte"] = df["destino"].str[-2:].astype(int)
 
+    # 3. Aggregation: Sum all trips into a single daily foot traffic metric
     aggregated = (
         df.groupby("codi_districte", as_index=False)
         .agg(daily_foot_traffic=("viajes", "sum"))
     )
-    # El dataset de MITMA suele venir para un único día; se toma el primer
-    # valor de 'fecha' como referencia informativa (no forma parte de la
-    # clave, ver decisión de snapshot único).
+
+    # 4. Metadata: The dataset usually represents a single day.
+    # We extract the date from the first row just for context.
     aggregated["fecha"] = pd.to_datetime(df["fecha"].iloc[0], format="%Y%m%d").date()
 
     return aggregated
 
 
 def load_district_mobility(path) -> pd.DataFrame:
-    """Atajo: lee y transforma en un solo paso."""
+    """Wrapper function: Reads and transforms the dataset in a single call."""
     return build_district_mobility(read_raw_mobility(path))

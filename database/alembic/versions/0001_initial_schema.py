@@ -1,19 +1,21 @@
-"""initial schema
-
+"""
+==============================================================================
+MIGRACIÓN 0001: ESQUEMA INICIAL (FASE 1)
+==============================================================================
 Revision ID: 0001
 Revises:
 Create Date: 2026-08-08
 
-Crea las 5 tablas base del dominio sociodemográfico/geoespacial y la vista
-`district_scorecard`, que calcula el Opportunity_Score al vuelo (normalización
-min-max + pesos 40% tráfico / 40% renta / 20% ausencia de competencia) en vez
-de guardarlo como columna física — así nunca queda desincronizado si cambian
-los pesos o se recargan los datos base.
+Esta es la migración principal que crea la base de datos desde cero.
+Contiene las tablas relacionales para los distritos, la tabla espacial para los 
+negocios (PostGIS), y la vista SQL que calcula la oportunidad de negocio.
 
-NOTA: la migración autogenerada por Alembic detectaba `spatial_ref_sys` como
-tabla "a eliminar" — es una tabla interna de la extensión PostGIS (catálogo
-de sistemas de referencia espacial), no del dominio de la aplicación. Se ha
-retirado esa instrucción a mano; nunca debe borrarse esa tabla.
+Aprendizaje clave sobre el 'Opportunity Score':
+Decidimos implementarlo como una VISTA SQL (`district_scorecard`) en lugar de 
+una columna fija en una tabla. Esto resuelve un gran problema: si mañana 
+cargamos nuevos datos de tráfico peatonal, la vista siempre calculará el score 
+correcto al vuelo, evitando el riesgo de que una columna física quede desactualizada.
+
 """
 
 from typing import Sequence, Union
@@ -28,7 +30,9 @@ down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-
+# ----------------------------------------------------------------------------
+# DDL: VISTA ANALÍTICA (CÁLCULO DEL SCORE)
+# ----------------------------------------------------------------------------
 DISTRICT_SCORECARD_VIEW = """
 CREATE OR REPLACE VIEW district_scorecard AS
 WITH competitor_counts AS (
@@ -75,13 +79,7 @@ ORDER BY opportunity_score DESC;
 
 
 def upgrade() -> None:
-    # Autosuficiencia: sin este paso, la migración falla al crear la
-    # columna geography() de `competitors` si se aplica contra una base de
-    # datos limpia donde nadie ha habilitado PostGIS todavía (detectado
-    # probando la migración contra una BD recién creada, sin el paso manual
-    # que sí se había hecho en pruebas anteriores). IF NOT EXISTS la hace
-    # segura de repetir aunque la imagen de postgis/postgis ya la traiga
-    # habilitada por defecto en algunos casos.
+    # Aseguramos que PostGIS está activo ANTES de intentar crear las tablas espaciales.
     op.execute("CREATE EXTENSION IF NOT EXISTS postgis")
 
     op.create_table(
@@ -140,13 +138,10 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["codi_districte"], ["districts.codi_districte"]),
         sa.PrimaryKeyConstraint("id_global"),
     )
-    # NOTA: no se crea aquí el índice espacial "idx_competitors_geom" a
-    # propósito. GeoAlchemy2 lo crea automáticamente vía un evento DDL
-    # "after_create" en cuanto se crea la tabla (comportamiento por defecto
-    # de las columnas Geography/Geometry). Crearlo también aquí de forma
-    # explícita duplica el índice y la migración falla con
-    # "relation idx_competitors_geom already exists" (detectado al probar
-    # la migración contra un Postgres real).
+
+    # Nota de desarrollo: No creamos el índice espacial de PostGIS aquí de forma manual.
+    # La librería GeoAlchemy2 lo crea por detrás automáticamente. Si lo pusiera aquí, 
+    # la migración fallaría por intentar crearlo dos veces.
     op.create_index(op.f("ix_competitors_codi_barri"), "competitors", ["codi_barri"], unique=False)
     op.create_index(op.f("ix_competitors_codi_districte"), "competitors", ["codi_districte"], unique=False)
 
@@ -154,12 +149,12 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # Este bloque deshace todo lo creado arriba.
     op.execute("DROP VIEW IF EXISTS district_scorecard")
 
     op.drop_index(op.f("ix_competitors_codi_districte"), table_name="competitors")
     op.drop_index(op.f("ix_competitors_codi_barri"), table_name="competitors")
-    # El índice espacial "idx_competitors_geom" lo elimina GeoAlchemy2 solo,
-    # vía su evento "before_drop", al hacer drop_table más abajo.
+
     op.drop_table("competitors")
     op.drop_index(op.f("ix_neighborhoods_codi_districte"), table_name="neighborhoods")
     op.drop_table("neighborhoods")

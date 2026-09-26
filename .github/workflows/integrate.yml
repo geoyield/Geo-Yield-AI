@@ -1,5 +1,12 @@
 name: Integration
 
+# ==============================================================================
+# WORKFLOW DE INTEGRACIÓN CONTINUA (CI)
+# ==============================================================================
+# Se ejecuta en cada Pull Request para validar que el nuevo código no rompe 
+# la funcionalidad existente. Actúa como la principal barrera de calidad antes 
+# de permitir una fusión (merge) hacia 'develop' o 'main'.
+
 on:
   workflow_dispatch:
   pull_request:
@@ -26,21 +33,38 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r backend/requirements.txt
 
+      # ------------------------------------------------------------------
+      # EJECUCIÓN DE PRUEBAS Y MÉTRICAS DE COBERTURA
+      # ------------------------------------------------------------------
       - name: Run tests and capture logs
         id: tests
+        # Se establece en 'true' deliberadamente. Si las pruebas fallan, el 
+        # pipeline no se detiene de inmediato. Esto garantiza que el siguiente 
+        # paso (subida de artefactos) se ejecute siempre para preservar los logs.
         continue-on-error: true  
         run: |
           mkdir -p test-results
+          # Se inyecta PYTHONPATH=. para resolver importaciones absolutas.
+          # Se genera reporte de cobertura (--cov) y logs XML para análisis estático.
           PYTHONPATH=. pytest tests/unit_tests/ --capture=tee-sys --cov=backend --cov-report=term --cov-report=html --junitxml=test-results/results.xml > test-results/results.log
 
+      # ------------------------------------------------------------------
+      # PERSISTENCIA DE ARTEFACTOS PARA DEPURACIÓN (DEBUGGING)
+      # ------------------------------------------------------------------
       - name: Upload Test Results Artifact
         uses: actions/upload-artifact@v4
         with:
           name: pytest-results
           path: test-results/
 
+      # ------------------------------------------------------------------
+      # VALIDACIÓN FINAL DE ESTADO (QUALITY GATE)
+      # ------------------------------------------------------------------
       - name: Fail the job if tests failed
         if: steps.tests.outcome == 'failure'
         run: |
+          # Evaluamos explícitamente el resultado del paso de pruebas.
+          # Si hubo fallo, forzamos un código de salida 1 para marcar el PR 
+          # en rojo e impedir la integración del código defectuoso.
           echo "La suite de pruebas unitarias o de modelo ha fallado. Revisa el artefacto 'pytest-results' para ver los logs."
           exit 1

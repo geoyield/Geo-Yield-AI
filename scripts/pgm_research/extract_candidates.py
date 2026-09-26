@@ -1,20 +1,24 @@
 """
-Extrae el texto completo de los artículos candidatos identificados en la
-investigación (305, 306, 307, 308, 309, 313), usando los nombres de campo
-reales confirmados contra la API de la AMB -- no los adivinados del
-script original.
+==============================================================================
+DATA WRANGLING: STAGING & CANDIDATE EXTRACTION
+==============================================================================
+File: scripts/investigacion_pgm/extract_candidates.py
 
-No asigna zona_pgm ni guarda nada en la base de datos: solo extrae y
-limpia el texto completo de cada candidato, para revisarlo a mano antes
-de decidir si se incorpora al corpus. La zona_pgm final para cada uno se
-decide después de leer el contenido completo, no antes.
+Extracts the full text of the candidate zoning articles identified during the 
+research phase (305, 306, 307, 308, 309, 313), utilizing the actual field names 
+confirmed from the API (not the official documentation).
+
+Architectural Note (Human-in-the-Loop):
+This script intentionally DOES NOT assign `zona_pgm` or write to the database. 
+It acts as an ETL Staging Area. It extracts and cleans the text, saving it to 
+an intermediate JSON file (`candidatos_para_revisar.json`). A human expert must 
+review the content before deciding the final `zona_pgm` classification.
 """
 
 import json
 import re
 
-# Candidatos por título, según la investigación -- pendientes de
-# verificar su contenido completo antes de aceptarlos.
+# Candidate articles identified by title, pending manual content verification.
 ARTICULOS_CANDIDATOS = {
     "305": "clau 15 -- Conservació de l'estructura urbana i edificatòria",
     "306": "clau 18 -- Ordenació volumètrica específica",
@@ -26,7 +30,11 @@ ARTICULOS_CANDIDATOS = {
 
 
 def limpiar_html(texto: str) -> str:
-    """Quita etiquetas HTML conservando estructura legible (saltos de línea por <br>/<li>)."""
+    """
+    Data Sanitization: 
+    Strips raw HTML tags while preserving structural line breaks (<br>/<li>). 
+    Feeding raw HTML into an NLP Embedding Model degrades semantic search quality.
+    """
     if not texto:
         return ""
     texto = re.sub(r"<br\s*/?>", "\n", texto)
@@ -39,7 +47,7 @@ def limpiar_html(texto: str) -> str:
 
 
 def extraer_candidatos():
-    with open("respuesta_cruda.json", encoding="utf-8") as f:
+    with open("raw_response.json", encoding="utf-8") as f:
         data = json.load(f)
 
     encontrados = {}
@@ -50,10 +58,12 @@ def extraer_candidatos():
             contenido = limpiar_html(item.get("description", {}).get("ca_ES", ""))
             encontrados[numero] = {"titulo": titulo, "contenido": contenido}
 
+    # Data Quality Check: Alert if expected candidates are missing in the payload
     faltantes = set(ARTICULOS_CANDIDATOS) - set(encontrados)
     if faltantes:
         print(f"AVISO: no se encontraron estos artículos en la respuesta: {faltantes}")
 
+    # Staging Area Output
     with open("candidatos_para_revisar.json", "w", encoding="utf-8") as f:
         json.dump(encontrados, f, ensure_ascii=False, indent=2)
 

@@ -1,9 +1,13 @@
 """
-Tests del ETL.
+==============================================================================
+UNIT TESTS: ETL PIPELINES
+==============================================================================
+File: tests/unit_tests/test_etl.py
 
-Se construyen DataFrames sintéticos en memoria (no se leen ficheros) para
-que los tests sean rápidos, deterministas y no dependan de datos reales que
-no viajan en el repositorio (ver .gitignore).
+Tests the ETL transformations for the Competitors, Income, and Mobility datasets.
+Instead of reading the massive real CSV files, these tests use synthetic 
+in-memory Pandas DataFrames. This ensures tests are deterministic, fast, 
+and independent of local data files ignored by Git.
 """
 
 import pandas as pd
@@ -16,20 +20,25 @@ from backend.etl.mobility import build_district_mobility, read_raw_mobility
 
 class TestParseSpanishNumber:
     def test_thousands_separator_with_trailing_zero(self):
-        # Caso que causó el bug real: pandas interpreta "13.990" como float
-        # y pierde el cero final si no se lee como texto. Esta función debe
-        # recuperar el valor correcto cuando SÍ recibe el texto crudo.
+        """
+        Regression Test: Verifies the fix for the silent bug where Pandas inferred 
+        "13.990" (13,990 Euros) as a float (13.99), dropping the trailing zero forever.
+        Our custom parser MUST return the correct integer magnitude.
+        """
         assert _parse_spanish_number("13.990") == 13990.0
 
     def test_thousands_separator_no_trailing_zero(self):
+        """Verifies standard Spanish formatting parsing."""
         assert _parse_spanish_number("21.976") == 21976.0
 
     def test_nan_passthrough(self):
+        """Verifies that missing values are handled gracefully."""
         assert pd.isna(_parse_spanish_number(float("nan")))
 
 
 class TestExtractDistrictNumber:
     def test_extracts_number(self):
+        """Verifies Regex extraction of the District ID from dirty government strings."""
         assert _extract_district_number("0801901 Barcelona distrito 01") == 1
         assert _extract_district_number("0801910 Barcelona distrito 10") == 10
 
@@ -39,15 +48,16 @@ class TestExtractDistrictNumber:
 
 class TestBuildDistrictIncome:
     def _raw_df(self) -> pd.DataFrame:
+        """Helper method: Creates a synthetic, dirty DataFrame mirroring the INE format."""
         return pd.DataFrame(
             {
                 "Municipios": [
-                    "08019 Barcelona",  # total municipio, debe descartarse
-                    "08019 Barcelona",  # distrito 1, año 2023 (el que debe quedar)
-                    "08019 Barcelona",  # distrito 1, sección censal, debe descartarse
-                    "08019 Barcelona",  # distrito 1, año 2022, debe descartarse (no es el más reciente)
-                    "08900 Badalona",  # otro municipio, debe descartarse
-                    "08019 Barcelona",  # distrito 1, otro indicador, debe descartarse
+                    "08019 Barcelona",  # Keep: Total municipality (will be filtered out by level)
+                    "08019 Barcelona",  # KEEP: District 1, 2023
+                    "08019 Barcelona",  # Filter: Census section level
+                    "08019 Barcelona",  # Filter: Old year (2022)
+                    "08900 Badalona",   # Filter: Wrong municipality
+                    "08019 Barcelona",  # Filter: Wrong indicator
                 ],
                 "Distritos": [
                     None,
@@ -79,6 +89,7 @@ class TestBuildDistrictIncome:
         )
 
     def test_filters_to_single_clean_row(self):
+        """Ensures the complex boolean filtering isolates the exact correct row."""
         result = build_district_income(self._raw_df())
         assert len(result) == 1
         row = result.iloc[0]
@@ -87,6 +98,7 @@ class TestBuildDistrictIncome:
         assert row["periodo"] == 2023
 
     def test_raises_when_no_matching_rows(self):
+        """Fail-Fast principle: Pipeline must crash if filter logic yields empty results."""
         empty_df = self._raw_df()
         empty_df["Municipios"] = "09999 Otra Ciudad"
         with pytest.raises(ValueError):
@@ -95,17 +107,18 @@ class TestBuildDistrictIncome:
 
 class TestBuildDistrictMobility:
     def test_filters_barcelona_and_aggregates(self):
+        """Verifies spatial filtering (starts with 08019) and trip aggregation."""
         raw_df = pd.DataFrame(
             {
                 "fecha": [20251015, 20251015, 20251015, 20251015],
-                "destino": ["0801901", "0801901", "0801902", "01001"],  # última fila: fuera de Barcelona
+                "destino": ["0801901", "0801901", "0801902", "01001"],  # Last row is outside BCN
                 "viajes": [100.0, 50.0, 30.0, 999.0],
             }
         )
         result = build_district_mobility(raw_df)
 
         district_1 = result[result["codi_districte"] == 1].iloc[0]
-        assert district_1["daily_foot_traffic"] == 150.0  # 100 + 50, la fila fuera de BCN no cuenta
+        assert district_1["daily_foot_traffic"] == 150.0  # 100 + 50 (ignoring outside trips)
 
         district_2 = result[result["codi_districte"] == 2].iloc[0]
         assert district_2["daily_foot_traffic"] == 30.0
@@ -118,9 +131,10 @@ class TestBuildDistrictMobility:
 
 class TestReadRawMobility:
     def test_preserves_leading_zero_in_destino(self, tmp_path):
-        # Regresión del bug real: sin dtype=str, pandas infiere 'destino'
-        # como int64 y "0801901" se lee como 801901 (pierde el cero
-        # inicial), rompiendo el filtro de prefijo "08019" de Barcelona.
+        """
+        Regression Test: Verifies the fix for the 'Lost Zero' bug.
+        The ETL MUST use `dtype=str` to prevent Pandas from casting '0801901' to '801901'.
+        """
         csv_path = tmp_path / "mobility.csv"
         csv_path.write_text("fecha|destino|viajes\n20251015|0801901|10.0\n", encoding="utf-8")
 
@@ -131,10 +145,11 @@ class TestReadRawMobility:
 
 class TestReadRawCensus:
     def test_strips_bom_from_first_column(self, tmp_path):
-        # Regresión del bug real: el censo comercial real trae BOM: sin
-        # encoding="utf-8-sig", la primera columna se lee como
-        # "\ufeffID_Global" en vez de "ID_Global", y build_competitors()
-        # revienta con un KeyError al buscar la columna por su nombre limpio.
+        """
+        Regression Test: Verifies the fix for the hidden Byte Order Mark (BOM).
+        The ETL MUST use `encoding="utf-8-sig"` to prevent the first column 
+        from being read as '\\ufeffID_Global'.
+        """
         csv_path = tmp_path / "census.csv"
         csv_path.write_bytes("ID_Global,Nom_Activitat\na1,Bars\n".encode("utf-8-sig"))
 
@@ -145,6 +160,7 @@ class TestReadRawCensus:
 
 class TestBuildCompetitors:
     def _raw_census_df(self) -> pd.DataFrame:
+        """Helper method: Creates synthetic commercial census data."""
         return pd.DataFrame(
             {
                 "ID_Global": ["a1", "a2", "a3", "a4"],
@@ -168,17 +184,17 @@ class TestBuildCompetitors:
 
     def test_filters_hosteleria_and_drops_null_coords(self):
         result = build_competitors(self._raw_census_df())
-        # a2 (Vestir, no es hostelería) y a3 (hostelería pero sin coords) deben quedar fuera
+        # a2 (Clothes, not hospitality) and a3 (hospitality but missing coords) must be dropped
         assert set(result["id_global"]) == {"a1", "a4"}
 
     def test_districts_are_static_reference_list(self):
+        """Verifies architectural decision: Districts must be static, not derived."""
         result = build_districts()
         assert len(result) == 10
         assert set(result["codi_districte"]) == set(range(1, 11))
 
     def test_neighborhoods_derived_from_full_census(self):
         result = build_neighborhoods(self._raw_census_df())
-        # 3 barrios distintos en el fixture (el Raval, el Gotic, Sant Pere),
-        # incluyendo el de la tienda de ropa (no hostelería) — neighborhoods
-        # se deriva del censo completo, no solo de los competidores.
+        # The 'Clothes' shop is in 'el Gotic'. Neighborhoods should be derived 
+        # from the FULL census, not just the hospitality competitors.
         assert len(result) == 3

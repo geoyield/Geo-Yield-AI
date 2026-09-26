@@ -1,41 +1,50 @@
+# ==============================================================================
+# LOCAL INFRASTRUCTURE ORCHESTRATION (Docker Compose)
+# ==============================================================================
+# This file defines and coordinates the containers for the Geo-Yield-AI
+# project. It follows the separation-of-concerns principle:
+# 1. Data layer (postgis): relational, spatial and vector storage.
+# 2. Logic layer (api): FastAPI backend.
+# ==============================================================================
+
 services:
 
   postgis:
-    # Imagen oficial de PostGIS: incluye PostgreSQL + extensión PostGIS, lista
-    # para datos geoespaciales sin configuración adicional. pgvector (motor
-    # RAG, Fase 2) se instalará como extensión adicional sobre esta misma
-    # base de datos — no hace falta un segundo servicio.
-    # Se construye desde deployment/Dockerfile.postgis (Postgres + PostGIS +
-    # pgvector) en vez de descargar la imagen oficial de postgis/postgis
-    # directamente: esa imagen NO trae pgvector (confirmado en ejecución
-    # real: "CREATE EXTENSION vector" falla con "extension is not
-    # available" contra la imagen sin modificar).
+    # Design decision (custom build):
+    # Instead of using the official prebuilt image, we build our own based on
+    # deployment/Dockerfile.postgis. This lets us unify PostgreSQL, PostGIS
+    # (spatial data) and pgvector (AI/RAG engine) in a single database engine,
+    # optimizing resources.
     build:
       context: ..
       dockerfile: deployment/Dockerfile.postgis
     container_name: geoyield_db
-    # Se reinicia solo cuando Docker vuelve a arrancar (p. ej. al abrir
-    # WSL), sin necesidad de correr "docker compose up" a mano cada vez.
-    # "unless-stopped" respeta que lo hayas parado tú explícitamente con
-    # "docker compose stop" -- solo se reinicia solo tras un reinicio de
-    # Docker/WSL, no si lo paraste a propósito.
+    # Restart policy: the container survives machine restarts, but respects
+    # the developer stopping it manually with 'stop'.
     restart: unless-stopped
+    # Secrets and variable management:
+    # We use a single .env file at the repo root as the single source of
+    # truth. Technical note: we avoid using the 'environment:' block here
+    # because Docker Compose would try to interpolate the variables early
+    # (leaving them empty) and would overwrite the correct values injected by
+    # 'env_file'.
     env_file:
-      - ../.env  # .env único en la raíz del repo (antes había ambigüedad entre uno en deployment/ y otro en la raíz)
-    # NOTA (bug real, detectado en ejecución): no se declara aquí un bloque
-    # "environment: POSTGRES_DB: ${POSTGRES_DB}..." adicional. Docker Compose
-    # interpola ${VAR} al parsear el YAML usando el .env del directorio del
-    # propio compose file (deployment/), NO el de env_file (../.env) -- como
-    # aquí no hay ningún .env, esas variables se resuelven como cadenas
-    # vacías, y al tener "environment:" prioridad sobre "env_file:", pisaban
-    # los valores correctos que env_file sí había inyectado bien. Resultado:
-    # POSTGRES_PASSWORD llegaba vacío al contenedor y Postgres se negaba a
-    # arrancar. env_file por sí solo ya es suficiente para pasar estas
-    # variables al contenedor -- no hace falta duplicarlas.
-    # Publicado al host (no solo 'expose') para poder ejecutar Alembic y el
-    # ETL desde fuera de Docker durante el desarrollo (ver README, Fase 1).
-    # Trade-off consciente para un entorno de desarrollo local: en un
-    # despliegue real, esto no debería publicarse al host.
+      - ../.env  # Single .env at the repo root (previously there was ambiguity between one in deployment/ and one at the root)
+    # NOTE (a real bug, caught at runtime): there is no extra
+    # "environment: POSTGRES_DB: ${POSTGRES_DB}..." block declared here.
+    # Docker Compose interpolates ${VAR} while parsing the YAML using the
+    # .env of the compose file's OWN directory (deployment/), NOT the one in
+    # env_file (../.env) -- since there is no .env there, those variables
+    # resolve to empty strings, and because "environment:" takes precedence
+    # over "env_file:", they overwrote the correct values that env_file had
+    # already injected properly. Result: POSTGRES_PASSWORD arrived empty at
+    # the container and Postgres refused to start. env_file alone is already
+    # enough to pass these variables to the container -- there is no need to
+    # duplicate them.
+    # Published to the host (not just 'expose') so Alembic and the ETL can be
+    # run from outside Docker during development (see README, Phase 1).
+    # A deliberate trade-off for a local development environment: in a real
+    # deployment this should not be published to the host.
     # Honours POSTGRES_HOST_PORT from the root .env, so a Postgres already
     # running on the host does not block startup. Interpolation reads the
     # .env of the compose file's directory, so run compose with
@@ -43,27 +52,19 @@ services:
     ports:
       - "${POSTGRES_HOST_PORT:-5432}:5432"
     volumes:
-      # A partir de Postgres/PostGIS 18, las imágenes oficiales esperan el
-      # volumen montado en /var/lib/postgresql (el directorio PADRE), no en
-      # /var/lib/postgresql/data como en versiones anteriores -- gestionan
-      # internamente las subcarpetas por versión mayor (estilo
-      # pg_ctlcluster). Montar directamente en .../data (como se hacía
-      # antes) hace que el contenedor se niegue a arrancar. Ver
-      # https://github.com/docker-library/postgres/pull/1259
+    # Data persistence:
+    # Specific adjustment for official images from PostgreSQL 18 onward: the
+    # volume must be mounted at the parent directory (/var/lib/postgresql),
+    # since the image manages the per-version subfolders internally.
       - geoyield_db:/var/lib/postgresql
     networks:
       - geoyield_net
-    # Da un periodo de gracia de 30s y hasta 5 reintentos (cada 10s) antes de
-    # declarar la base de datos 'unhealthy', para que la api no intente
-    # conectar antes de que Postgres esté listo para aceptar conexiones.
-    #
-    # CORRECCIÓN: el healthcheck original ("geoyield ping") no es un comando
-    # real. pg_isready sí lo es y viene incluido en la imagen de PostGIS.
-    # $$POSTGRES_USER / $$POSTGRES_DB (con doble $) es intencionado: evita
-    # que Compose los interpole al parsear el YAML (el mismo problema del
-    # bloque "environment" de arriba) y hace que el propio shell DENTRO del
-    # contenedor los expanda al ejecutar el healthcheck, tomándolos de las
-    # variables que env_file sí inyectó correctamente.
+    # Health check:
+    # Ensures the database is ready to accept TCP connections before the API
+    # tries to start.
+    # Technical note: we use double dollar ($$) to stop Compose from
+    # evaluating the variable while reading the YAML; we want it evaluated by
+    # the shell INSIDE the container using the values from the .env file.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 10s
@@ -73,15 +74,18 @@ services:
 
   api:
     build:
-      # CORRECCIÓN: el contexto debe ser la raíz del repo, no deployment/,
-      # porque el Dockerfile necesita copiar backend/. Con el contexto
-      # anterior (implícito, deployment/) esa carpeta quedaba fuera del build.
+      # The build 'context' is set to the repo root ('..') so the Dockerfile
+      # can access the /backend folder and copy the application's source
+      # code.
       context: ..
       dockerfile: deployment/Dockerfile
     container_name: geoyield_api
     restart: unless-stopped
     env_file:
       - ../.env
+    # Port mapping to avoid collisions:
+    # The API runs internally on port 8000, but we expose it on 8080 to avoid
+    # conflicting with other local applications on the host.
     ports:
       - "8080:8000"
     # No log volume any more: logs go to stdout as JSON (one line per event),
@@ -90,15 +94,27 @@ services:
     #   docker compose logs -f api | jq .
     networks:
       - geoyield_net
+    # Startup dependency:
+    # Thanks to the 'condition: service_healthy' block, Docker patiently waits
+    # for the database to confirm it's operational before starting the API.
     depends_on:
       postgis:
         condition: service_healthy
 
-# Volúmenes gestionados por Docker (no mapeados a directorios del host) para
-# evitar problemas de permisos y dejar la persistencia en manos de Docker.
+# ==============================================================================
+# DOCKER-MANAGED RESOURCES
+# ==============================================================================
+
+# Named volumes:
+# Persistence is delegated to the Docker engine instead of mapping OS folders
+# (bind mounts), avoiding permission issues (especially between
+# Linux/Windows/macOS).
 volumes:
   geoyield_db:
 
+# Internal network (bridge):
+# Isolates communication between containers, letting them discover each other
+# via automatic DNS resolution (using service names: 'postgis').
 networks:
   geoyield_net:
     driver: bridge

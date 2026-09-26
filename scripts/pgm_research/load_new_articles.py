@@ -1,21 +1,25 @@
 """
-Carga los 7 artículos de zonificación PGM identificados y verificados en
-esta sesión de investigación (304, 305, 306, 307, 308, 309, 313) al
-corpus legal, con el mismo formato que el resto (302, 303, 311).
+==============================================================================
+ETL PIPELINE: INGEST NEWLY DISCOVERED PGM ZONES
+==============================================================================
+File: scripts/investigacion_pgm/load_new_articles.py
 
-304 se carga con zona_pgm=None (normativa general): su propio texto no
-se limita a una zona en particular, aunque se citó como referencia
-cruzada dentro del 306.
+Loads the 7 PGM zoning articles identified and verified during this research 
+session (304, 305, 306, 307, 308, 309, 313) into the legal corpus, applying 
+the exact same schema as the baseline articles (302, 303, 311).
 
-307, 308 y 309 comparten la misma zona_pgm ("edificacio_aillada"),
-porque son tres subtipos (unifamiliar, plurifamiliar I-IV, plurifamiliar
-V) del mismo código clau 20a -- el motor de búsqueda ya combina varios
-artículos por zona en cada consulta, así que no hace falta un código de
-zona distinto para cada subtipo.
+Architectural Notes:
+- Article 304 is loaded with `zona_pgm=None` (General Law). Although it was 
+  discovered as a cross-reference inside 306, its text regulates general 
+  rules for the entire city, not a specific block.
+- Articles 307, 308, and 309 share the exact same `zona_pgm` ("edificacio_aillada"). 
+  They are subtypes (single-family, multi-family) of the same Clau 20a code. 
+  The RAG engine already retrieves multiple articles per zone via vector search, 
+  so creating distinct IDs for each subtype would be over-engineering.
 
-Requiere haber corrido antes extraer_candidatos.py (genera
-candidatos_para_revisar.json con 305/306/307/308/309/313) en la misma
-carpeta -- este script no vuelve a llamar a la API de la AMB.
+Dependency:
+Requires `extract_candidates.py` to be executed first to generate the 
+`candidatos_para_revisar.json` file.
 """
 
 import json
@@ -24,6 +28,9 @@ import re
 import sys
 from pathlib import Path
 
+# Robust Path Resolution:
+# Dynamically resolves the project root regardless of where the developer 
+# triggers the script in the terminal, preventing `ModuleNotFoundError`.
 project_root = (
     Path.cwd()
     if Path("backend").is_dir()
@@ -46,8 +53,8 @@ from backend.rag.embeddings import embed_texts
 
 FUENTE = "PGM (Secció V)"
 
-# Contenido del 304 ya verificado en esta sesión -- no depende de volver
-# a extraer nada, se incluye tal cual se leyó.
+# Hardcoded Article 304: Verified during this session.
+# Does not depend on the JSON extraction because it was manually retrieved.
 ARTICULO_304 = {
     "titulo": "Usos col·lectius o usos públics en grans superfícies",
     "contenido": (
@@ -63,7 +70,7 @@ ARTICULO_304 = {
     "zona_pgm": None,
 }
 
-# zona_pgm final decidida para cada artículo de candidatos_para_revisar.json
+# The final mapping decision made after manual review of the candidates
 ZONA_PGM_POR_ARTICULO = {
     "305": "conservacio_estructura_urbana",
     "306": "ordenacio_volumetrica_especifica",
@@ -75,13 +82,15 @@ ZONA_PGM_POR_ARTICULO = {
 
 
 def limpiar_titulo(titulo: str) -> str:
-    """Quita el prefijo 'Article NNN. ' del título, para que coincida con
-    el formato ya usado en 302/303/311 (solo el nombre descriptivo de la zona)."""
+    """
+    Strips the 'Article NNN. ' prefix from the title so it matches the 
+    normalized schema format used in the rest of the Vector Database.
+    """
     return re.sub(r"^Article\s+\d+\w*\.\s*", "", titulo).strip()
 
 
 def cargar():
-    with open("candidatos_para_revisar.json", encoding="utf-8") as f:
+    with open("candidates_for_review.json", encoding="utf-8") as f:
         candidatos = json.load(f)
 
     articulos_a_insertar = [("304", ARTICULO_304["titulo"], ARTICULO_304["contenido"], ARTICULO_304["zona_pgm"])]
@@ -98,6 +107,8 @@ def cargar():
     insertados = []
     with Session(engine) as session:
         for numero, titulo, contenido, zona_pgm in articulos_a_insertar:
+            
+            # Idempotency Check: Prevents Primary Key collision crashes
             existe = session.query(LegalChunk).filter_by(fuente_legal=FUENTE, numero_articulo=numero).first()
             if existe:
                 print(f"Artículo {numero} ya existe en la base de datos -- saltando (evita duplicados).")

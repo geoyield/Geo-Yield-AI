@@ -1,20 +1,23 @@
 """
-Endpoint de competidores reales, para el mapa del frontend.
+==============================================================================
+ROUTER: SPATIAL COMPETITORS ENDPOINT (PHASE 1)
+==============================================================================
+File: backend/api/routers/competitors.py
 
-Dos modos:
-- Sin lat/lon: comportamiento original -- centroide calculado como el
-  promedio de todos los competidores del distrito, y hasta `limit` de
-  ellos, de los del distrito completo.
-- Con lat/lon (cuando el usuario buscó por dirección exacta): centro es
-  el punto dado tal cual, y los competidores se buscan por radio real
-  alrededor de ese punto (ST_DWithin, en metros) en vez de por distrito
-  -- un bar a 400m pero al otro lado de la frontera administrativa del
-  distrito sigue siendo competencia real.
+This endpoint feeds the interactive map in the frontend.
+It implements a hybrid API design with two spatial resolution modes:
 
-No expone las 11.000+ filas de la tabla completa de golpe: se limita el
-número de puntos devueltos (parámetro `limit`), tanto por rendimiento
-del mapa (Leaflet con miles de marcadores individuales se vuelve lento
-e ilegible) como por tamaño de la respuesta HTTP.
+1. District Mode: Returns competitors within a political district. The map
+   center is calculated on-the-fly as the centroid (geometric average) of
+   all premises in that district.
+2. Radius Mode: If the user provides coordinates (Lat/Lon) after searching
+   for an exact street, we ignore political borders and use PostGIS
+   (`ST_DWithin`) to search for real competition within a radius in meters.
+
+Performance Lesson (Full-Stack):
+We do not expose the >11,000 rows of the commercial census at once. We force a
+`limit` parameter because, during development, I discovered that rendering
+thousands of Leaflet markers simultaneously crashed the browser's DOM.
 """
 
 from fastapi import APIRouter, Depends, Query
@@ -22,31 +25,35 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from backend.api.deps import get_session
-from backend.api.schemas.competidores import CentroOut, CompetidorOut, CompetidoresResponse
+from backend.api.schemas.competitors import CentroOut, CompetidorOut, CompetidoresResponse
 from backend.observability import get_logger, log_event
 
 logger = get_logger("api.competidores")
 
-router = APIRouter(prefix="/api", tags=["competidores"])
+router = APIRouter(prefix="/api", tags=["competitors"])
 
 
-@router.get("/competidores", response_model=CompetidoresResponse)
-def listar_competidores(
+@router.get("/competitors", response_model=CompetidoresResponse)
+def list_competitors(
     codi_districte: int = Query(..., ge=1, le=10),
     lat: float | None = Query(
-        None, description="Si se indica junto con lon, busca por radio alrededor de este punto en vez de todo el distrito."
+        None, description="If provided alongside lon, searches by radius around this point instead of the whole district."
     ),
     lon: float | None = Query(None),
     radio_metros: int = Query(500, ge=50, le=5000),
     limit: int = Query(200, ge=1, le=1000),
     db: Session = Depends(get_session),
 ):
+    # Smart routing: the frontend doesn't need to send a explicit "mode" flag.
+    # The mere presence of coordinates triggers the geometric search.
     if lat is not None and lon is not None:
-        return _buscar_por_radio(db, lat, lon, radio_metros, limit)
-    return _buscar_por_distrito(db, codi_districte, limit)
+        return _search_by_radius(db, lat, lon, radio_metros, limit)
+    return _search_by_district(db, codi_districte, limit)
 
 
-def _buscar_por_distrito(db: Session, codi_districte: int, limit: int) -> CompetidoresResponse:
+def _search_by_district(db: Session, codi_districte: int, limit: int) -> CompetidoresResponse:
+    # Dynamic SQL: We calculate the map camera's centroid on the fly.
+    # We extract X and Y using native PostGIS functions.
     centro_row = db.execute(
         text(
             """
@@ -87,7 +94,7 @@ def _buscar_por_distrito(db: Session, codi_districte: int, limit: int) -> Compet
     )
 
 
-def _buscar_por_radio(db: Session, lat: float, lon: float, radio_metros: int, limit: int) -> CompetidoresResponse:
+def _search_by_radius(db: Session, lat: float, lon: float, radio_metros: int, limit: int) -> CompetidoresResponse:
     punto = f"POINT({lon} {lat})"
 
     total_row = db.execute(

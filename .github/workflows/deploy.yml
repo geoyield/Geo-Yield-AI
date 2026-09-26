@@ -1,17 +1,17 @@
 name: Deploy API
 
-# CORRECCIÓN (Fase 0): se retira el input "model_release" y la variable de
-# entorno MODEL_RELEASE. Pertenecían al flujo legacy que desplegaba un
-# modelo scikit-learn descargado como GitHub Release; ese flujo se ha
-# eliminado (ver backend/api/api.py). Además, el step de checkout
-# referenciaba una variable "model_version" que nunca se había definido
-# (bug real detectado en la auditoría).
+# ==============================================================================
+# WORKFLOW DE DESPLIEGUE CONTINUO (CD)
+# ==============================================================================
+# Refactorización de Arquitectura: Se ha eliminado el flujo heredado (legacy) 
+# que dependía de la descarga de modelos scikit-learn desde GitHub Releases, 
+# ya que la lógica actual delega esto en la arquitectura RAG (ver api.py).
 
 on:
   workflow_dispatch:
     inputs:
       api_version:
-        description: 'Tag de la API a desplegar (usar "latest" para el más reciente)'
+        description: 'Tag de Git a desplegar (usar "latest" para resolver al más reciente)'
         required: true
         default: 'latest'
 
@@ -21,18 +21,26 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    
+    # Inyección de configuración de entorno.
+    # Corrección de Seguridad: DATABASE_URL se ha migrado explícitamente 
+    # del contexto 'vars' al contexto 'secrets', dado que las cadenas de 
+    # conexión exponen credenciales de autenticación en texto plano.
     env:
       POSTGRES_DB: ${{ vars.POSTGRES_DB }}
       POSTGRES_USER: ${{ vars.POSTGRES_USER }}
       POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       LOG_LEVEL: ${{ vars.LOG_LEVEL }}
+      
     steps:
+      # 1. Obtención del código fuente completo (incluyendo historial de tags)
       - name: Checkout repository
-        uses: actions/checkout@v4  # v4+ permite fetch de tags, necesario para poder desplegar un tag específico
+        uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 0 
 
+      # 2. Resolución dinámica de la versión a desplegar
       - name: Resolve target tag
         id: resolve_tag
         run: |
@@ -43,15 +51,12 @@ jobs:
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
+      # 3. Posicionamiento en el commit exacto de la versión (Despliegue determinista)
       - name: Checkout target tag
         run: git checkout ${{ steps.resolve_tag.outputs.tag }}
 
+      # 4. Notificación al proveedor Cloud (Render) vía Webhook
       - name: Trigger Render deploy
         env:
           RENDER_DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
         run: curl -X POST "$RENDER_DEPLOY_HOOK"
-
-# NOTA DE SEGURIDAD (Fase 0): DATABASE_URL se ha movido de "vars" (variables
-# públicas del repo) a "secrets", ya que suele contener usuario y contraseña
-# de la base de datos embebidos en la cadena de conexión. Hay que crear el
-# secret "DATABASE_URL" en la configuración del repo/entorno de GitHub.

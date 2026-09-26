@@ -1,3 +1,13 @@
+<!-- 
+==============================================================================
+EXECUTIVE SUMMARY COMPONENT (STATELESS)
+==============================================================================
+File: frontend/src/components/VerdictCard.vue
+
+A pure presentational "dumb" component. It receives the parsed LLM verdict 
+and district data via props, applying styling and formatting without holding 
+any business logic of its own.
+-->
 <script setup>
 import { computed } from 'vue'
 
@@ -5,14 +15,17 @@ const props = defineProps({
   informe: { type: Object, required: true },
 })
 
+// Data Dictionary mapping LLM string literals to UI tokens
 const COLORES = {
   rojo: { bg: 'bg-rojo', ring: 'ring-rojo/40', texto: 'Riesgo alto', textoClase: 'text-rojo' },
   ambar: { bg: 'bg-ambar', ring: 'ring-ambar/40', texto: 'Viable con reservas', textoClase: 'text-brass' },
   verde: { bg: 'bg-verde', ring: 'ring-verde/40', texto: 'Condiciones favorables', textoClase: 'text-verde' },
 }
 
+// Graceful Degradation: If the LLM output is malformed, default to Amber (Warning)
 const veredicto = computed(() => COLORES[props.informe.semaforo] ?? COLORES.ambar)
 
+// Native Browser i18n (Internationalization) for strict Spanish formatting
 const formatoNumero = new Intl.NumberFormat('es-ES', { maximumFractionDigits: 0 })
 const formatoMoneda = new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 })
 

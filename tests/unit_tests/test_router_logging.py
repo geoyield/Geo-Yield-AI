@@ -9,7 +9,8 @@ running inside a request, and that the notable failure paths are not silent.
 import pytest
 
 from backend.api import api, deps
-from backend.api.routers import articulos, competidores, geocodificacion, informes, logs
+from backend.api.routers import articles, competitors, logs, reports
+from backend.api.routers import geocoding as geocoding_router
 from backend.geo import amb_identify, geocoding
 from backend.ia import agent
 from backend.observability import configure_logging, set_trace_id
@@ -17,7 +18,7 @@ from backend.observability.context import reset_trace_id
 from backend.rag import gemini_adapter
 
 ALL_MODULES = (
-    api, deps, informes, articulos, competidores, geocodificacion,
+    api, deps, reports, articles, competitors, geocoding_router,
     geocoding, amb_identify, agent, gemini_adapter,
 )
 
@@ -46,10 +47,10 @@ def production_logging(monkeypatch):
 @pytest.mark.parametrize("module,expected", [
     (api, "geoyield.api"),
     (deps, "geoyield.api.deps"),
-    (informes, "geoyield.api.informes"),
-    (articulos, "geoyield.api.articulos"),
-    (competidores, "geoyield.api.competidores"),
-    (geocodificacion, "geoyield.api.geocodificacion"),
+    (reports, "geoyield.api.informes"),
+    (articles, "geoyield.api.articulos"),
+    (competitors, "geoyield.api.competidores"),
+    (geocoding_router, "geoyield.api.geocodificacion"),
     (geocoding, "geoyield.geo.geocoding"),
     (amb_identify, "geoyield.geo.amb_identify"),
     (agent, "geoyield.ia.agent"),
@@ -76,7 +77,7 @@ def test_every_logger_lives_under_the_geoyield_namespace():
 
 
 def test_the_api_logger_is_the_parent_of_the_api_layer():
-    for module in (deps, informes, articulos, competidores, geocodificacion):
+    for module in (deps, reports, articles, competitors, geocoding_router):
         assert module.logger.name.startswith(api.logger.name + ".")
 
 
@@ -90,7 +91,7 @@ def test_no_module_configures_handlers_of_its_own(production_logging, capsys):
         assert module.logger.handlers == [], f"{module.__name__} must not add handlers"
         assert module.logger.propagate is True
 
-    articulos.logger.warning("reaches the root handler")
+    articles.logger.warning("reaches the root handler")
     assert '"logger": "geoyield.api.articulos"' in capsys.readouterr().out
 
 
@@ -130,7 +131,7 @@ def test_a_missing_cited_article_is_logged(production_logging, capsys):
             return _Result()
 
     with pytest.raises(Exception) as excinfo:
-        articulos.obtener_articulo(
+        articles.obtener_articulo(
             fuente_legal="PGM 1976", numero_articulo="999", db=_Session()
         )
 
@@ -149,7 +150,7 @@ def test_report_failure_puts_district_in_context_not_the_message(production_logg
     try:
         raise RuntimeError("the model is unreachable")
     except RuntimeError:
-        informes.logger.exception(
+        reports.logger.exception(
             "Report generation failed",
             extra={"context": {"codi_districte": 3, "zona_pgm": "13b"}},
         )
