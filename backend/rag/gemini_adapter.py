@@ -11,11 +11,12 @@ without rewriting the core engine, this class wraps the Gemini SDK so it
 perfectly mimics the Anthropic SDK signatures.
 """
 
-import logging
 import os
 import time
 
-logger = logging.getLogger("geoyield_rag")
+from backend.observability import get_logger
+
+logger = get_logger("rag.gemini_adapter")
 
 # Resilience Settings: Cloud LLMs often throw transient 5xx errors due to quota 
 # or server load. We implement a simple retry mechanism before failing.

@@ -14,12 +14,13 @@ are accepted. Any other code (roads, parks, undeveloped land) is automatically
 discarded.
 """
 
-import logging
 import time
 
 import requests
 
-logger = logging.getLogger("geoyield_geocoding")
+from backend.observability import get_logger
+
+logger = get_logger("geo.amb_identify")
 
 # Note: Using the live MapServer instead of the cached _25831 to ensure 
 # we query the most up-to-date legal geometries.

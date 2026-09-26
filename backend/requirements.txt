@@ -1,46 +1,56 @@
 # ==============================================================================
-# DEPENDENCIAS DIRECTAS DEL BACKEND (Geo-Yield-AI)
+# BACKEND DIRECT DEPENDENCIES (Geo-Yield-AI)
 # ==============================================================================
-# Se aplica una política de fijación estricta de versiones (Version Pinning) 
-# usando '==' para garantizar la reproducibilidad exacta (Evitar el síndrome 
-# de "en mi máquina sí funciona").
+# A strict version-pinning policy is applied, using '==' to guarantee exact
+# reproducibility (avoiding the "works on my machine" syndrome).
 
 # --- Web framework ---
 fastapi==0.135.3
 uvicorn==0.43.0
 starlette==0.48.0
 
-# --- Validación de datos y Configuración ---
+# --- Data validation and configuration ---
 pydantic==2.12.5
 python-dotenv==1.2.2
 
-# --- Capa de Persistencia y Base de Datos ---
+# --- Persistence and database layer ---
 SQLAlchemy==2.0.49
 psycopg2-binary==2.9.12
 alembic==1.19.1
 geoalchemy2==0.20.0
 pgvector==0.5.0
 
-# --- Motor RAG (Retrieval-Augmented Generation) y Legal ---
+# --- RAG (Retrieval-Augmented Generation) and legal engine ---
 sentence-transformers==5.7.0
 anthropic==0.122.0
 
-# --- Agente Orquestador (Grafos de Inteligencia Artificial) ---
+# --- Orchestrator agent (AI graphs) ---
 langgraph==1.2.11
 
-# Opcional: solo para pruebas con clave gratuita mientras se financia la
-# cuenta de Anthropic (ver backend/rag/gemini_adapter.py). No es la
-# decisión final de proveedor -- esa sigue siendo Claude.
+# Optional: only for testing with a free-tier key while the Anthropic account
+# gets funded (see backend/rag/gemini_adapter.py). This is not the final
+# provider decision -- that remains Claude.
 google-genai==2.18.1
 
-# --- Procesamiento de Datos (ETL) ---
-# Nota Técnica (Gestión de Riesgos): Se ha dado el salto controlado a la versión 
-# mayor 3.0 tras verificar exhaustivamente su compatibilidad. Las pruebas de 
-# integración (test_etl.py) de la tubería de datos han certificado que no 
-# hay rupturas (Breaking Changes) respecto a la versión 2.x anterior.
+# --- Data processing (ETL) ---
+# Technical note (risk management): the controlled jump to major version 3.0
+# was made after thoroughly verifying its compatibility. The data pipeline's
+# integration tests (test_etl.py) certified there are no breaking changes
+# relative to the previous 2.x version.
 pandas==3.0.2
 
-# --- Calidad de Código y Testing ---
+# --- Observability: direct CloudWatch shipping (OPTIONAL) ---
+# Only needed with LOG_CLOUDWATCH_ENABLED=true, i.e. when the host does NOT
+# collect stdout (the Render case). On ECS/Fargate/App Runner the host driver
+# already ships stdout and these two are unnecessary.
+#
+# The import is lazy (backend/observability/cloudwatch.py), so the app starts
+# fine without them while the flag stays false. Left commented out so boto3
+# (~15 MB with transitives) is not imposed on anyone who does not need it.
+# boto3==1.41.20
+# watchtower==3.5.0
+
+# --- Code quality and testing ---
 pytest==8.3.5
 pytest-cov==4.1.0
 httpx==0.28.1

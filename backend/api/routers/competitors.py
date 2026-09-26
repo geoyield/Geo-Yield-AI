@@ -7,16 +7,16 @@ File: backend/api/routers/competitors.py
 This endpoint feeds the interactive map in the frontend.
 It implements a hybrid API design with two spatial resolution modes:
 
-1. District Mode: Returns competitors within a political district. The map 
-   center is calculated on-the-fly as the centroid (geometric average) of 
+1. District Mode: Returns competitors within a political district. The map
+   center is calculated on-the-fly as the centroid (geometric average) of
    all premises in that district.
-2. Radius Mode: If the user provides coordinates (Lat/Lon) after searching 
-   for an exact street, we ignore political borders and use PostGIS 
+2. Radius Mode: If the user provides coordinates (Lat/Lon) after searching
+   for an exact street, we ignore political borders and use PostGIS
    (`ST_DWithin`) to search for real competition within a radius in meters.
 
 Performance Lesson (Full-Stack):
-We do not expose the >11,000 rows of the commercial census at once. We force a 
-`limit` parameter because, during development, I discovered that rendering 
+We do not expose the >11,000 rows of the commercial census at once. We force a
+`limit` parameter because, during development, I discovered that rendering
 thousands of Leaflet markers simultaneously crashed the browser's DOM.
 """
 
@@ -26,6 +26,9 @@ from sqlalchemy.orm import Session
 
 from backend.api.deps import get_session
 from backend.api.schemas.competitors import CentroOut, CompetidorOut, CompetidoresResponse
+from backend.observability import get_logger, log_event
+
+logger = get_logger("api.competidores")
 
 router = APIRouter(prefix="/api", tags=["competitors"])
 
@@ -63,6 +66,12 @@ def _search_by_district(db: Session, codi_districte: int, limit: int) -> Competi
     ).mappings().first()
 
     if centro_row is None or centro_row["total"] == 0:
+        # A district with no competitors loaded is a data gap, not a normal
+        # result: the map silently renders empty for the user.
+        log_event(
+            logger, "WARNING", "No competitors found for district",
+            event="competidores.vacio", codi_districte=codi_districte,
+        )
         return CompetidoresResponse(centro=None, total=0, competidores=[], modo="distrito")
 
     filas = db.execute(

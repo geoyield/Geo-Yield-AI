@@ -1,54 +1,70 @@
 # ==============================================================================
-# ORQUESTACIÓN DE INFRAESTRUCTURA LOCAL (Docker Compose)
+# LOCAL INFRASTRUCTURE ORCHESTRATION (Docker Compose)
 # ==============================================================================
-# Este archivo define y coordina los contenedores del proyecto Geo-Yield-AI.
-# Sigue el principio de separación de responsabilidades:
-# 1. Capa de Datos (postgis): Almacenamiento relacional, espacial y vectorial.
-# 2. Capa de Lógica (api): Backend centralizado en FastAPI.
+# This file defines and coordinates the containers for the Geo-Yield-AI
+# project. It follows the separation-of-concerns principle:
+# 1. Data layer (postgis): relational, spatial and vector storage.
+# 2. Logic layer (api): FastAPI backend.
 # ==============================================================================
 
 services:
 
   postgis:
-    # Decisión de Diseño (Custom Build): 
-    # En lugar de usar la imagen oficial prefabricada, construimos una propia 
-    # basada en deployment/Dockerfile.postgis. Esto nos permite unificar 
-    # PostgreSQL, PostGIS (datos espaciales) y pgvector (motor IA/RAG) en un 
-    # solo motor de base de datos, optimizando recursos.
+    # Design decision (custom build):
+    # Instead of using the official prebuilt image, we build our own based on
+    # deployment/Dockerfile.postgis. This lets us unify PostgreSQL, PostGIS
+    # (spatial data) and pgvector (AI/RAG engine) in a single database engine,
+    # optimizing resources.
     build:
       context: ..
       dockerfile: deployment/Dockerfile.postgis
     container_name: geoyield_db
-    # Política de reinicio: El contenedor sobrevive a reinicios del equipo, 
-    # pero respeta si el desarrollador lo detiene manualmente con 'stop'.
+    # Restart policy: the container survives machine restarts, but respects
+    # the developer stopping it manually with 'stop'.
     restart: unless-stopped
-    # Gestión de Secretos y Variables:
-    # Utilizamos un único archivo .env en la raíz como única fuente de verdad.
-    # Nota técnica: Evitamos usar el bloque 'environment:' aquí porque Docker 
-    # Compose intentaría interpolar las variables antes de tiempo (dejándolas 
-    # vacías) y sobrescribiría los valores correctos inyectados por 'env_file'
+    # Secrets and variable management:
+    # We use a single .env file at the repo root as the single source of
+    # truth. Technical note: we avoid using the 'environment:' block here
+    # because Docker Compose would try to interpolate the variables early
+    # (leaving them empty) and would overwrite the correct values injected by
+    # 'env_file'.
     env_file:
-      - ../.env
-    # Exposición de Puertos (Trade-off de Desarrollo):
-    # En producción este puerto estaría cerrado al exterior. En desarrollo lo 
-    # mapeamos al host (5432) para poder lanzar las migraciones (Alembic) y 
-    # cargar los datos (ETL) cómodamente desde nuestro entorno local.    
+      - ../.env  # Single .env at the repo root (previously there was ambiguity between one in deployment/ and one at the root)
+    # NOTE (a real bug, caught at runtime): there is no extra
+    # "environment: POSTGRES_DB: ${POSTGRES_DB}..." block declared here.
+    # Docker Compose interpolates ${VAR} while parsing the YAML using the
+    # .env of the compose file's OWN directory (deployment/), NOT the one in
+    # env_file (../.env) -- since there is no .env there, those variables
+    # resolve to empty strings, and because "environment:" takes precedence
+    # over "env_file:", they overwrote the correct values that env_file had
+    # already injected properly. Result: POSTGRES_PASSWORD arrived empty at
+    # the container and Postgres refused to start. env_file alone is already
+    # enough to pass these variables to the container -- there is no need to
+    # duplicate them.
+    # Published to the host (not just 'expose') so Alembic and the ETL can be
+    # run from outside Docker during development (see README, Phase 1).
+    # A deliberate trade-off for a local development environment: in a real
+    # deployment this should not be published to the host.
+    # Honours POSTGRES_HOST_PORT from the root .env, so a Postgres already
+    # running on the host does not block startup. Interpolation reads the
+    # .env of the compose file's directory, so run compose with
+    # `--env-file .env` from the repo root (see README).
     ports:
-      - "5432:5432"
+      - "${POSTGRES_HOST_PORT:-5432}:5432"
     volumes:
-    # Persistencia de Datos:
-    # Ajuste específico para imágenes oficiales a partir de PostgreSQL 18:
-    # El volumen debe montarse en el directorio padre (/var/lib/postgresql) 
-    # ya que la imagen gestiona internamente las subcarpetas por versión.
+    # Data persistence:
+    # Specific adjustment for official images from PostgreSQL 18 onward: the
+    # volume must be mounted at the parent directory (/var/lib/postgresql),
+    # since the image manages the per-version subfolders internally.
       - geoyield_db:/var/lib/postgresql
     networks:
       - geoyield_net
-    # Comprobación de Salud (Healthcheck):
-    # Garantiza que la base de datos esté lista para aceptar conexiones TCP 
-    # antes de que la API intente arrancar.
-    # Nota técnica: Usamos el doble dólar ($$) para evitar que Compose evalúe 
-    # la variable al leer el YAML; queremos que la evalúe el shell DENTRO 
-    # del contenedor usando los valores del archivo .env.
+    # Health check:
+    # Ensures the database is ready to accept TCP connections before the API
+    # tries to start.
+    # Technical note: we use double dollar ($$) to stop Compose from
+    # evaluating the variable while reading the YAML; we want it evaluated by
+    # the shell INSIDE the container using the values from the .env file.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 10s
@@ -58,46 +74,47 @@ services:
 
   api:
     build:
-      # El contexto de construcción ('context') se define en la raíz del 
-      # repositorio ('..') para que el Dockerfile pueda acceder a la carpeta 
-      # /backend y copiar el código fuente de la aplicación.
+      # The build 'context' is set to the repo root ('..') so the Dockerfile
+      # can access the /backend folder and copy the application's source
+      # code.
       context: ..
       dockerfile: deployment/Dockerfile
     container_name: geoyield_api
     restart: unless-stopped
     env_file:
       - ../.env
-    # Mapeo de Puertos para evitar colisiones:
-    # La API corre internamente en el puerto 8000, pero la exponemos al 8080 
-    # para no entrar en conflicto con otras aplicaciones locales del host.
+    # Port mapping to avoid collisions:
+    # The API runs internally on port 8000, but we expose it on 8080 to avoid
+    # conflicting with other local applications on the host.
     ports:
       - "8080:8000"
-    volumes:
-      - geoyield_logs:/app/backend/api/logs
+    # No log volume any more: logs go to stdout as JSON (one line per event),
+    # which is what both `docker compose logs` and the ECS awslogs/FireLens
+    # drivers collect. A file inside the container reaches no collector.
+    #   docker compose logs -f api | jq .
     networks:
       - geoyield_net
-    # Dependencia de Inicialización:
-    # Gracias al bloque 'condition: service_healthy', Docker espera pacientemente 
-    # a que la base de datos confirme que está operativa antes de arrancar la API.
+    # Startup dependency:
+    # Thanks to the 'condition: service_healthy' block, Docker patiently waits
+    # for the database to confirm it's operational before starting the API.
     depends_on:
       postgis:
         condition: service_healthy
 
 # ==============================================================================
-# RECURSOS GESTIONADOS POR DOCKER
+# DOCKER-MANAGED RESOURCES
 # ==============================================================================
 
-# Volúmenes Nombrados (Named Volumes):
-# Se delega la persistencia al motor de Docker en lugar de mapear carpetas 
-# del sistema operativo (Bind Mounts), evitando así problemas de permisos 
-# (especialmente entre Linux/Windows/macOS).
+# Named volumes:
+# Persistence is delegated to the Docker engine instead of mapping OS folders
+# (bind mounts), avoiding permission issues (especially between
+# Linux/Windows/macOS).
 volumes:
   geoyield_db:
-  geoyield_logs:
 
-# Red Interna (Bridge):
-# Aísla la comunicación entre contenedores, permitiéndoles descubrirse 
-# mediante resolución DNS automática (usando los nombres de servicio: 'postgis').
+# Internal network (bridge):
+# Isolates communication between containers, letting them discover each other
+# via automatic DNS resolution (using service names: 'postgis').
 networks:
   geoyield_net:
     driver: bridge

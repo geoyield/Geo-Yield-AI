@@ -13,7 +13,6 @@ from `api.py`, and `api.py` in turn imported the routers to register them,
 the Python interpreter would deadlock, unable to resolve the loading order.
 """
 
-import logging
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
@@ -23,13 +22,14 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker
 
 from backend.db.connection import resolve_database_url
+from backend.observability import get_logger, shutdown_logging, tame_third_party_loggers
 
 # We load the .env variables here in case we are running the API locally 
 # (e.g., executing Uvicorn directly). If we are running inside Docker, 
 # Docker already injects the environment variables, and this line safely does nothing.
 load_dotenv()
 
-logger = logging.getLogger("geoyield_api")
+logger = get_logger("api.deps")
 
 # Global variables to hold the database engine and session factory.
 # Initialized as None so they are only populated when the application actually starts.
@@ -50,6 +50,10 @@ async def lifespan(app: FastAPI):
     state and throwing runtime errors to users later.
     """
     global db_engine, SessionLocal
+
+    # Re-applied here because a CLI start installs uvicorn's own logging
+    # config after this module is imported; the lifespan runs after that.
+    tame_third_party_loggers()
 
     try:
         database_url = resolve_database_url()
@@ -84,6 +88,9 @@ async def lifespan(app: FastAPI):
     if db_engine is not None:
         db_engine.dispose()
         logger.info("Database connections safely closed.")
+
+    # Drains the pending CloudWatch queue before the process exits.
+    shutdown_logging()
 
 
 def get_session():

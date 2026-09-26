@@ -1,44 +1,56 @@
 """
-Módulo de Gestión de Conexión a Base de Datos.
+Database Connection Management Module.
 
-Centraliza la lógica para resolver la URL de conexión a PostgreSQL.
-Implementa un patrón de "Sobrescritura Dinámica de Host" (Host Override) 
-para resolver el problema de enrutamiento DNS entre los contenedores de 
-Docker y el sistema operativo anfitrión (Localhost).
+Centralizes the logic for resolving the PostgreSQL connection URL.
+Implements a "Dynamic Host Override" pattern to solve the DNS routing
+problem between Docker containers and the host operating system
+(Localhost).
 """
+
 import os
 import re
 
+
 def resolve_database_url() -> str:
     """
-    Recupera y formatea la URL de conexión a la base de datos.
-    
-    Lee la variable DATABASE_URL del entorno. Si se detecta la variable 
-    de entorno DB_HOST_OVERRIDE, utiliza expresiones regulares para 
-    sustituir el host original (usualmente 'postgis' de la red de Docker) 
-    por el valor proporcionado (usualmente 'localhost').
+    Retrieves and formats the database connection URL.
+
+    Reads the DATABASE_URL environment variable. If the DB_HOST_OVERRIDE
+    environment variable is set, uses regular expressions to replace the
+    original host (usually 'postgis' from the Docker network) with the
+    provided value (usually 'localhost'). If DB_PORT_OVERRIDE is also set,
+    the port is replaced the same way -- needed when the container
+    publishes Postgres on a non-default host port.
 
     Returns:
-        str: La cadena de conexión SQLAlchemy perfectamente formateada.
-        
+        str: The fully formatted SQLAlchemy connection string.
+
     Raises:
-        RuntimeError: Si la variable DATABASE_URL no existe en el entorno.
+        RuntimeError: If the DATABASE_URL variable does not exist in the
+            environment.
     """
-    # 1. Recuperamos la URL original (del .env)
+    # 1. Retrieve the original URL (from .env)
     url = os.getenv("DATABASE_URL")
 
-    # 2. Patrón Fail-Fast: Si no hay URL, abortamos inmediatamente en lugar de 
-    # dejar que SQLAlchemy falle más adelante con un error críptico.
+    # 2. Fail-fast pattern: if there's no URL, abort immediately instead of
+    # letting SQLAlchemy fail later with a cryptic error.
     if not url:
-        raise RuntimeError("DATABASE_URL no está definida en el entorno (.env)")
+        raise RuntimeError("DATABASE_URL is not defined in the environment (.env)")
 
-    # 3. Comprobamos si nos piden sobrescribir el host
+    # 3. Check whether we're asked to override the host
     override = os.getenv("DB_HOST_OVERRIDE")
 
-    # 4. Inyección del nuevo host mediante Regex
+    # 4. Inject the new host via Regex
     if override:
-        # La expresión regular busca "@" + (cualquier texto sin ":" ni "/") + ":"
-        # Ejemplo: Captura '@postgis:' y lo cambia por '@localhost:'
+        # The regex looks for "@" + (any text without ":" or "/") + ":"
+        # Example: captures '@postgis:' and replaces it with '@localhost:'
         url = re.sub(r"@[^:/]+:", f"@{override}:", url)
-        
+
+    # The host override alone is not enough when the container publishes
+    # Postgres on a non-default host port (POSTGRES_HOST_PORT): the URL would
+    # still point at 5432 and the connection would fail.
+    port_override = os.getenv("DB_PORT_OVERRIDE")
+    if port_override:
+        url = re.sub(r"(@[^:/]+):\d+", rf"\g<1>:{port_override}", url)
+
     return url

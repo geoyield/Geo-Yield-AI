@@ -13,7 +13,6 @@ Unlike the local PGM laws (where 1 PDF = 1 Article), here 1 PDF = 1 Full Law
 Legal Source Name (`fuente_legal`) is explicitly required as a CLI argument.
 """
 
-import logging
 import sys
 from pathlib import Path
 
@@ -28,8 +27,9 @@ from backend.rag.general_chunking import parse_articulo_general
 from backend.rag.embeddings import EmbeddingFunction, embed_texts
 from backend.rag.pdf_extraction import extract_text_from_pdf
 
-logger = logging.getLogger("geoyield_rag")
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+from backend.observability import configure_logging, get_logger
+
+logger = get_logger("etl.general_law")
 
 
 def load_general_law(
@@ -97,6 +97,7 @@ def run(pdf_path: Path, fuente_legal: str, engine=None, embed_fn: EmbeddingFunct
 
 
 if __name__ == "__main__":
+    configure_logging()
     if len(sys.argv) != 3:
         print('Uso: python -m database.load_general_law <ruta.pdf> "<Law Name>"')
         sys.exit(1)

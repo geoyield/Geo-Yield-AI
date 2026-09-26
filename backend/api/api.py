@@ -4,7 +4,7 @@ API APPLICATION FACTORY
 ==============================================================================
 File: backend/api/api.py
 
-This module defines the central instance of the FastAPI application. It acts as 
+This module defines the central instance of the FastAPI application. It acts as
 the main orchestrator that consolidates:
 1. Application Lifecycle Management (Lifespan).
 2. Middlewares (CORS, Observability/Logging).
@@ -13,6 +13,7 @@ the main orchestrator that consolidates:
 """
 
 import logging
+import os
 import time
 
 from fastapi import FastAPI
@@ -20,20 +21,27 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
 from sqlalchemy import text
 
+from backend.observability import (
+    configure_logging,
+    get_logger,
+    log_event,
+    new_trace_id,
+    reset_trace_id,
+    set_trace_id,
+)
+
 from . import deps
 from .metrics.metrics import metrics
-from .routers import articles, chat, competitors, geocoding, reports
+from .routers import articles, chat, competitors, geocoding, logs, reports
 
-# Loose Coupling Principle in Logging:
-# In this file (api.py), we strictly limit ourselves to "requesting" the logger 
-# named "geoyield_api" to emit messages. The responsibility of deciding HOW and 
-# WHERE these messages are stored (console vs .log file, formatting) is centralized 
-# in main.py. Thus, if we change the logging storage strategy in the future, 
-# not a single line of business logic in this API needs to be modified.
-logger = logging.getLogger("geoyield_api")
+# Also configured here, not only in main.py, so `uvicorn backend.api.api:app`
+# is covered. Idempotent.
+configure_logging()
 
-# Application Instantiation. We use the 'lifespan' pattern (context manager) 
-# recommended by recent FastAPI versions, deprecating the old 'startup'/'shutdown' 
+logger = get_logger("api")
+
+# Application Instantiation. We use the 'lifespan' pattern (context manager)
+# recommended by recent FastAPI versions, deprecating the old 'startup'/'shutdown'
 # events. This ensures safe database connection pooling management.
 app = FastAPI(
     title="Geo-Yield-AI API",
@@ -41,42 +49,52 @@ app = FastAPI(
     lifespan=deps.lifespan,
 )
 
-# CORS (Cross-Origin Resource Sharing) Middleware Configuration.
-# Allows the client (Vue/Vite Frontend) hosted on different domains/ports 
-# to consume this API without being blocked by the browser's Same-Origin Policy (SOP).
-# NOTE: In a strict production environment, this list must be restricted 
-# exclusively to the final domain URL, avoiding permissive origins.
+# Was hardcoded to the Vite localhost ports, which made it impossible for a
+# deployed frontend to call the API or ship its logs.
+_DEFAULT_ORIGINS = "http://localhost:5173,http://localhost:5174,http://127.0.0.1:5173"
+CORS_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("CORS_ORIGINS", _DEFAULT_ORIGINS).split(",")
+    if origin.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:5174", "http://127.0.0.1:5173"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Without this the browser cannot read the trace id back.
+    expose_headers=["X-Request-ID"],
 )
 
-# Router Registration. We apply the Modular Architecture principle, 
+# Router Registration. We apply the Modular Architecture principle,
 # separating business logic into distinct domains to facilitate maintainability.
 app.include_router(reports.router)
 app.include_router(competitors.router)
 app.include_router(articles.router)
 app.include_router(geocoding.router)
 app.include_router(chat.router)
+app.include_router(logs.router)
+
+# Probes are called every few seconds; logging them is paid-for noise.
+UNLOGGED_PATHS = frozenset({"/health", "/ready", "/metrics"})
 
 
 @app.get("/health", tags=["Monitoring"])
 def health() -> dict:
     """
     Liveness Probe Endpoint.
-    
-    Informs the orchestrator (e.g., Docker, Kubernetes) that the web process 
+
+    Informs the orchestrator (e.g., Docker, Kubernetes) that the web process
     is running and has not deadlocked.
-    
+
     Returns:
         dict: A dictionary with the "ok" status.
-        
-    Architectural Note: 
-        This endpoint is intentionally agnostic to the database state. 
-        If the DB goes down, the container should NOT enter a crash-loop; 
+
+    Architectural Note:
+        This endpoint is intentionally agnostic to the database state.
+        If the DB goes down, the container should NOT enter a crash-loop;
         it must stay alive waiting for the DB to recover.
     """
     return {"status": "ok"}
@@ -86,19 +104,19 @@ def health() -> dict:
 def ready():
     """
     Readiness Probe Endpoint.
-    
-    Unlike the Liveness probe, this endpoint verifies that the API is fully 
-    operational and capable of processing real traffic by checking the active 
+
+    Unlike the Liveness probe, this endpoint verifies that the API is fully
+    operational and capable of processing real traffic by checking the active
     connection to the PostgreSQL database.
-    
+
     Returns:
-        dict | PlainTextResponse: "ready" status (HTTP 200) if connected, 
+        dict | PlainTextResponse: "ready" status (HTTP 200) if connected,
         or an error (HTTP 503 Service Unavailable) if the DB is unreachable.
-        
+
     Python Technical Note:
-        We access the `deps.db_engine` attribute dynamically. Had we used 
-        `from .deps import db_engine`, the initial import would have copied 
-        the `None` value (by value). By accessing via the module namespace, 
+        We access the `deps.db_engine` attribute dynamically. Had we used
+        `from .deps import db_engine`, the initial import would have copied
+        the `None` value (by value). By accessing via the module namespace,
         we guarantee reading the updated pointer managed by the Lifespan context.
     """
     if deps.db_engine is None:
@@ -109,8 +127,8 @@ def ready():
         with deps.db_engine.connect() as conn:
             conn.execute(text("SELECT 1"))
         return {"status": "ready"}
-    except Exception as exc:
-        logger.error(f"Readiness check failed: {exc}")
+    except Exception:
+        logger.exception("Readiness check failed")
         return PlainTextResponse("database unreachable", status_code=503)
 
 
@@ -118,10 +136,10 @@ def ready():
 def metrics_endpoint() -> str:
     """
     Application Metrics Endpoint.
-    
-    Exposes Key Performance Indicators (KPIs) in plain text format, 
+
+    Exposes Key Performance Indicators (KPIs) in plain text format,
     making them ready to be scraped by external monitoring tools like Prometheus.
-    
+
     Returns:
         str: Text string containing the total processed requests.
     """
@@ -131,31 +149,59 @@ def metrics_endpoint() -> str:
 @app.middleware("http")
 async def track_request_count(request, call_next):
     """
-    Observability and Request Interception Middleware.
-    
-    Acts as a proxy wrapping every incoming HTTP request. Its purpose 
-    is code instrumentation:
-    1. Increments the global metrics counter.
-    2. Calculates the processing time (latency) of each endpoint.
-    3. Logs the trace in the logging system to facilitate debugging.
-    
-    Args:
-        request (Request): The incoming HTTP request object.
-        call_next (Callable): The function passing control to the next middleware/route.
-        
-    Returns:
-        Response: The HTTP response generated by the backend.
+    Pins the trace id and logs method, path, status and duration.
+
+    Was a logger.debug(), which never emitted at the default LOG_LEVEL=20 --
+    so in practice there was no request log at all. The trace id comes from
+    the frontend's X-Request-ID header, or is generated, and is pinned in a
+    ContextVar so every log line raised during this request carries it.
     """
-    start = time.time()
-    
-    # 1. Metric Registration
+    trace_id = request.headers.get("X-Request-ID") or new_trace_id()
+    # Client-controlled and ends up in every log line, so constrain it.
+    trace_id = "".join(c for c in trace_id if c.isalnum() or c in "-_")[:64] or new_trace_id()
+    token = set_trace_id(trace_id)
+
+    start = time.perf_counter()
     metrics["total_requests"] += 1
-    
-    # 2. Pass control and await resolution
-    response = await call_next(request)
-    
-    # 3. Performance calculation and traceability logging
-    duration = time.time() - start
-    logger.debug(f"{request.method} {request.url.path} - {duration:.3f}s")
-    
+
+    try:
+        response = await call_next(request)
+    except Exception:
+        duration_ms = (time.perf_counter() - start) * 1000
+        # One record, not two: exc_info lets the formatter build the `error`
+        # object, so a separate logger.exception() would double the ingestion.
+        logger.error(
+            f"{request.method} {request.url.path} - unhandled exception",
+            exc_info=True,
+            extra={
+                "duration_ms": round(duration_ms, 2),
+                "context": {"method": request.method, "path": request.url.path},
+            },
+        )
+        reset_trace_id(token)
+        raise
+
+    duration_ms = (time.perf_counter() - start) * 1000
+    response.headers["X-Request-ID"] = trace_id
+
+    if request.url.path not in UNLOGGED_PATHS:
+        # Keeps `filter level = "ERROR"` meaningful in Logs Insights.
+        if response.status_code >= 500:
+            level = logging.ERROR
+        elif response.status_code >= 400:
+            level = logging.WARNING
+        else:
+            level = logging.INFO
+
+        log_event(
+            logger,
+            level,
+            f"{request.method} {request.url.path} {response.status_code}",
+            duration_ms=duration_ms,
+            method=request.method,
+            path=request.url.path,
+            status_code=response.status_code,
+        )
+
+    reset_trace_id(token)
     return response

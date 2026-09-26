@@ -14,12 +14,13 @@ here. This file relies exclusively on the 'suburb' field returned by Nominatim,
 which empirical testing confirmed matches Barcelona's 10 official districts.
 """
 
-import logging
 import re
 
 import requests
 
-logger = logging.getLogger("geoyield_geocoding")
+from backend.observability import get_logger
+
+logger = get_logger("geo.geocoding")
 
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 

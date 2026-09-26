@@ -1,11 +1,11 @@
-<!-- 
+<!--
 ==============================================================================
 ROOT COMPONENT & STATE ORCHESTRATOR
 ==============================================================================
 File: frontend/src/App.vue
 
-This is the main Vue component. It manages the global application state 
-(coordinates, active district, streaming status) and distributes it down to 
+This is the main Vue component. It manages the global application state
+(coordinates, active district, streaming status) and distributes it down to
 its child components (Map, Form, Chat) via props.
 -->
 <script setup>
@@ -16,6 +16,9 @@ import ChatBubble from './components/ChatBubble.vue'
 import DistrictMap from './components/DistrictMap.vue'
 import RegulationsViewer from './components/RegulationsViewer.vue'
 import { chatInformeStream, generarInformeStream } from './services/api.js'
+import { createLogger } from './services/logger.js'
+
+const log = createLogger('app.informe')
 
 const SEMAFOROS_VALIDOS = ['verde', 'ambar', 'rojo']
 
@@ -35,9 +38,9 @@ const textoSintesis = ref('')
 // ---------------------------------------------------------------------------
 // OPTIMISTIC UI RENDERING (STREAMING TOLERANCE)
 // ---------------------------------------------------------------------------
-// The backend ultimately parses the LLM output robustly. However, to provide 
-// instant UX feedback during streaming, the frontend aggressively guesses the 
-// color from the very first token. If it hallucinates (e.g., "ambar."), the 
+// The backend ultimately parses the LLM output robustly. However, to provide
+// instant UX feedback during streaming, the frontend aggressively guesses the
+// color from the very first token. If it hallucinates (e.g., "ambar."), the
 // `semaforoConfirmado` variable will override it once the stream finishes.
 const semaforoConfirmado = ref(null)
 const resumenConfirmado = ref(null)
@@ -71,6 +74,7 @@ function reiniciarResultados() {
 }
 
 async function onGenerar({ codiDistricte, zonaPgm, ubicacion }) {
+  const inicio = performance.now()
   cargando.value = true
   codiDistrictePedido.value = codiDistricte
   ubicacionPedida.value = ubicacion
@@ -94,6 +98,14 @@ async function onGenerar({ codiDistricte, zonaPgm, ubicacion }) {
       semaforoConfirmado.value = evento.semaforo
       resumenConfirmado.value = evento.resumen
       cargando.value = false
+
+      log.event('informe.completado', {
+        codi_districte: codiDistricte,
+        zona_pgm: zonaPgm,
+        semaforo: evento.semaforo,
+        duration_ms: performance.now() - inicio,
+        articulos_citados: articulosCitados.value.length,
+      })
     },
   })
 }
@@ -101,9 +113,9 @@ async function onGenerar({ codiDistricte, zonaPgm, ubicacion }) {
 // ---------------------------------------------------------------------------
 // CONVERSATIONAL CHAT (GRACEFUL DEGRADATION)
 // ---------------------------------------------------------------------------
-// The AI Agent extracts the address from free-text. If it successfully resolves 
+// The AI Agent extracts the address from free-text. If it successfully resolves
 // it into a District and Zone, it triggers the same pipeline as the manual form.
-// If it fails to resolve completely, it yields what it found to the manual 
+// If it fails to resolve completely, it yields what it found to the manual
 // form as a "pre-fill", acting as a safety net.
 const mensajeChat = ref('')
 const procesandoChat = ref(false)

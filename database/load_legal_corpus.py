@@ -9,7 +9,6 @@ It iterates through a directory of raw PDFs, chaining the sub-modules:
 Extraction -> Chunking & Version Filtering -> Batch Embedding -> DB Upsert.
 """
 
-import logging
 import sys
 from pathlib import Path
 
@@ -25,8 +24,9 @@ from backend.rag.chunking import ARTICLE_TO_ZONA_PGM, parse_legal_chunks, select
 from backend.rag.embeddings import EmbeddingFunction, embed_texts
 from backend.rag.pdf_extraction import extract_text_from_pdf
 
-logger = logging.getLogger("geoyield_rag")
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+from backend.observability import configure_logging, get_logger
+
+logger = get_logger("etl.legal_corpus")
 
 PGM_FUENTE_LEGAL = "PGM (Secció V)"
 
@@ -109,6 +109,7 @@ def run(pdf_dir: Path, engine=None, embed_fn: EmbeddingFunction = embed_texts) -
 
 
 if __name__ == "__main__":
+    configure_logging()
     if len(sys.argv) != 2:
         print("Usage: python -m database.load_legal_corpus <path_to_pdf_directory>")
         sys.exit(1)

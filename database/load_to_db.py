@@ -21,7 +21,6 @@ Estrategias de carga híbridas implementadas:
        garantiza la integridad absoluta con la última foto del ayuntamiento.
 """
 
-import logging
 
 import pandas as pd
 from dotenv import load_dotenv
@@ -38,8 +37,9 @@ from backend.etl.competitors import build_competitors, build_districts, build_ne
 from backend.etl.income import load_district_income
 from backend.etl.mobility import load_district_mobility
 
-logger = logging.getLogger("geoyield_etl")
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+from backend.observability import configure_logging, get_logger
+
+logger = get_logger("etl.load_to_db")
 
 
 def _upsert_dataframe(session: Session, model, df: pd.DataFrame, pk_column: str) -> None:
@@ -150,4 +150,5 @@ def run(engine=None) -> None:
 
 
 if __name__ == "__main__":
+    configure_logging()
     run()
